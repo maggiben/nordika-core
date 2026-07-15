@@ -855,11 +855,8 @@ export class MessagingService {
     }
 
     const sequence = await this.resolveNextCatalogSend(contact._id);
-    if (sequence.awaitingReply) {
-      throw new ConflictException(
-        'Wait for the current catalog message to be answered before sending the next one.',
-      );
-    }
+    // Allow re-sending the current open step (periodic reminder). Block only
+    // when trying to send a different catalog message out of order.
     if (catalogMessage.assignedContactId) {
       if (
         !sequence.next ||
@@ -869,6 +866,10 @@ export class MessagingService {
           'Wait for the current catalog message to be answered before sending the next one.',
         );
       }
+    } else if (sequence.awaitingReply) {
+      throw new ConflictException(
+        'Wait for the current catalog message to be answered before sending the next one.',
+      );
     }
 
     const sentAt = new Date();
@@ -1304,7 +1305,8 @@ export class MessagingService {
       const sequence = await this.resolveNextCatalogSend(
         this.toObjectId(contactId, 'contact'),
       );
-      if (!sequence.next || sequence.awaitingReply) {
+      // `awaitingReply` still carries `next` = the open step to remind.
+      if (!sequence.next) {
         skipped += group.length;
         continue;
       }
@@ -1843,7 +1845,7 @@ export class MessagingService {
   /**
    * Next catalog WhatsApp for a lead:
    * - first never-sent step by sortOrder, or
-   * - awaitingReply while a step is unanswered, or
+   * - the earliest unanswered step (for periodic reminders; later steps stay blocked), or
    * - first step again after every step has been answered (when allowRestart).
    */
   private async resolveNextCatalogSend(
@@ -1887,7 +1889,8 @@ export class MessagingService {
         return { next: item, awaitingReply: false };
       }
       if (!last.repliedAt) {
-        return { next: null, awaitingReply: true };
+        // Keep reminding this step; do not advance to later flooded steps.
+        return { next: item, awaitingReply: true };
       }
     }
 

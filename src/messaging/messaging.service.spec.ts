@@ -843,12 +843,15 @@ describe('MessagingService', () => {
     expect(batch.failed).toBe(0);
     expect(sendInteractive).toHaveBeenCalledTimes(1);
 
+    // Periodic reminder of the open step is allowed…
     await expect(
       service.sendCatalogMessage(first._id, {
         contactId: String(contact._id),
       }),
-    ).rejects.toBeInstanceOf(ConflictException);
+    ).resolves.toMatchObject({ ok: true });
+    expect(sendInteractive).toHaveBeenCalledTimes(2);
 
+    // …but later steps stay blocked until they reply.
     const secondId = (await service.listCatalogMessages()).find(
       (row) =>
         row.title === 'Dos' && row.assignedContactId === String(contact._id),
@@ -859,6 +862,10 @@ describe('MessagingService', () => {
         contactId: String(contact._id),
       }),
     ).rejects.toBeInstanceOf(ConflictException);
+
+    const reminded = await service.sendAssignedCatalogMessages();
+    expect(reminded.sent).toBe(1);
+    expect(sendInteractive).toHaveBeenCalledTimes(3);
   });
 
   it('ignores ciclos outside the date window', async () => {
