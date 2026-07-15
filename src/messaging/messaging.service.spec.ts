@@ -218,6 +218,9 @@ function matches(
       if ('$ne' in ops) {
         return left !== ops.$ne;
       }
+      if ('$in' in ops && Array.isArray(ops.$in)) {
+        return ops.$in.includes(left);
+      }
       if ('$gte' in ops) {
         const bound = ops.$gte;
         if (left instanceof Date && bound instanceof Date) {
@@ -321,6 +324,11 @@ describe('MessagingService', () => {
     threadId?: Types.ObjectId;
     title?: string;
     source?: string;
+    taskId?: string;
+    taskLabel?: string;
+    sourceId?: Types.ObjectId;
+    slotKey?: string;
+    questionMessageId?: Types.ObjectId;
   }>();
   const catalog = createModelMock<{
     title: string;
@@ -329,6 +337,20 @@ describe('MessagingService', () => {
     sortOrder?: number;
     active: boolean;
   }>();
+  const sources = createModelMock<{
+    filename: string;
+    content: unknown;
+    createdAt?: Date;
+  }>();
+  // Override create to stamp createdAt for "latest source" sorting.
+  const originalSourcesCreate = sources.create;
+  sources.create = jest.fn((doc: { filename: string; content: unknown }) => {
+    return originalSourcesCreate({
+      ...doc,
+      createdAt: new Date(),
+    });
+  }) as typeof sources.create;
+
   const accounts = createModelMock<{
     email: string;
     emailNotificationSchedule?: {
@@ -370,6 +392,7 @@ describe('MessagingService', () => {
       dispatches,
       messages,
       catalog,
+      sources,
       accounts,
     ]) {
       model.store.length = 0;
@@ -392,6 +415,7 @@ describe('MessagingService', () => {
       dispatches as never,
       messages as never,
       catalog as never,
+      sources as never,
       accounts as never,
       evolution,
       cache,
@@ -2146,5 +2170,248 @@ describe('MessagingService', () => {
         },
       }),
     ).toBeNull();
+  });
+
+  it('asks pending objective tasks after catalog is complete and advances on reply', async () => {
+    const lead = await contacts.create({
+      phone: '5491138911794',
+      label: 'Benjamin',
+      active: true,
+      tags: ['staff'],
+      catalogSlotKey: '2026-07-15T09:00|America/Argentina/Buenos_Aires|weekly',
+      catalogSlotStartAt: new Date('2026-07-15T12:00:00.000Z'),
+    });
+    const only = await service.createCatalogMessage({
+      title: 'Performance del equipo',
+      body: 'Performance',
+      assignedContactId: String(lead._id),
+    });
+    await sources.create({
+      filename: 'obra.json',
+      content: {
+        tareas_con_objetivo: [
+          {
+            id: 'carp',
+            label: 'colocacion carpinterias',
+            avance_base: 40,
+          },
+          { id: 'done', label: 'ya terminada', avance_base: 100 },
+          { id: 'pint', label: 'pintura', avance_base: 10 },
+        ],
+      },
+    });
+
+    await service.sendCatalogMessage(String(only._id));
+    backdateCatalogOutbound(messages.store, only._id);
+    sendInteractive.mockClear();
+
+    await service.recordInboundMessage({
+      phone: lead.phone,
+      body: 'performance ok',
+    });
+    expect(sendInteractive).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        sendInteractive.mock.calls[0] as unknown as [string, { title?: string }]
+      )[1].title,
+    ).toBe('Tarea 1/2 · colocacion carpinterias');
+    const firstAsk = messages.store.find(
+      (row) =>
+        row.source === 'task_checklist' &&
+        row.direction === 'outbound' &&
+        row.taskId === 'carp',
+    );
+    expect(firstAsk?.repliedAt).toBeUndefined();
+
+    sendInteractive.mockClear();
+    await service.recordInboundMessage({
+      phone: lead.phone,
+      body: 'carpinteria al 60%',
+    });
+    expect(firstAsk?.replyBody).toBe('carpinteria al 60%');
+    expect(firstAsk?.repliedAt).toBeTruthy();
+    const inboundAsk = messages.store.find(
+      (row) =>
+        row.direction === 'inbound' &&
+        row.taskId === 'carp' &&
+        row.body === 'carpinteria al 60%',
+    );
+    expect(String(inboundAsk?.questionMessageId)).toBe(String(firstAsk?._id));
+    expect(inboundAsk?.title).toBe('Tarea 1/2 · colocacion carpinterias');
+    expect(inboundAsk?.threadId).toBeTruthy();
+    expect(sendInteractive).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        sendInteractive.mock.calls[0] as unknown as [string, { title?: string }]
+      )[1].title,
+    ).toBe('Tarea 2/2 · pintura');
+
+    const listed = await service.listTaskChecklists({
+      contactId: String(lead._id),
+    });
+    expect(listed.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('does not start task checklist while a catalog step is still open', async () => {
+    const lead = await contacts.create({
+      phone: '5491138911795',
+      label: 'Benjamin',
+      active: true,
+      tags: ['staff'],
+      catalogSlotKey: '2026-07-15T09:00|America/Argentina/Buenos_Aires|weekly',
+      catalogSlotStartAt: new Date('2026-07-15T12:00:00.000Z'),
+    });
+    await service.createCatalogMessage({
+      title: 'Performance del equipo',
+      body: 'Performance',
+      assignedContactId: String(lead._id),
+    });
+    await service.createCatalogMessage({
+      title: 'Asistencia',
+      body: 'Asistencia',
+      assignedContactId: String(lead._id),
+    });
+    await sources.create({
+      filename: 'obra.json',
+      content: {
+        tareas_con_objetivo: [
+          { id: 'carp', label: 'colocacion carpinterias', avance_base: 20 },
+        ],
+      },
+    });
+
+    await service.sendCatalogMessage(
+      String(
+        catalog.store.find((row) => row.title === 'Performance del equipo')
+          ?._id,
+      ),
+    );
+    sendInteractive.mockClear();
+    await (
+      service as unknown as {
+        kickoffTaskChecklists: (k: string) => Promise<void>;
+      }
+    ).kickoffTaskChecklists(
+      '2026-07-15T09:00|America/Argentina/Buenos_Aires|weekly',
+    );
+    expect(sendInteractive).not.toHaveBeenCalled();
+    expect(
+      messages.store.filter((row) => row.source === 'task_checklist'),
+    ).toHaveLength(0);
+  });
+
+  it('ignores ack-like replies for open task checklist asks', async () => {
+    const lead = await contacts.create({
+      phone: '5491138911796',
+      label: 'Benjamin',
+      active: true,
+      tags: ['staff'],
+      catalogSlotKey: 'slot-a',
+      catalogSlotStartAt: new Date('2026-07-15T12:00:00.000Z'),
+    });
+    await sources.create({
+      filename: 'obra.json',
+      content: {
+        tareas_con_objetivo: [
+          { id: 'carp', label: 'colocacion carpinterias', avance_base: 20 },
+          { id: 'pint', label: 'pintura', avance_base: 10 },
+        ],
+      },
+    });
+    await (
+      service as unknown as {
+        sendNextTaskChecklistAsk: (
+          contact: (typeof contacts.store)[0],
+          slotKey: string,
+        ) => Promise<void>;
+      }
+    ).sendNextTaskChecklistAsk(lead, 'slot-a');
+    expect(sendInteractive).toHaveBeenCalledTimes(1);
+    sendInteractive.mockClear();
+
+    await service.recordInboundMessage({
+      phone: lead.phone,
+      body: 'Recibido',
+    });
+    expect(sendInteractive).not.toHaveBeenCalled();
+    const ask = messages.store.find(
+      (row) => row.source === 'task_checklist' && row.direction === 'outbound',
+    );
+    expect(ask?.repliedAt).toBeUndefined();
+  });
+
+  it('skips task checklist when Evolution is off or no pending tasks exist', async () => {
+    const lead = await contacts.create({
+      phone: '5491138911797',
+      label: 'Benjamin',
+      active: true,
+      tags: ['staff'],
+      catalogSlotKey: 'slot-b',
+      catalogSlotStartAt: new Date('2026-07-15T12:00:00.000Z'),
+    });
+    isConfigured.mockReturnValue(false);
+    await (
+      service as unknown as {
+        sendNextTaskChecklistAsk: (
+          contact: (typeof contacts.store)[0],
+          slotKey: string,
+        ) => Promise<void>;
+      }
+    ).sendNextTaskChecklistAsk(lead, 'slot-b');
+    expect(
+      messages.store.filter((row) => row.source === 'task_checklist'),
+    ).toHaveLength(0);
+
+    isConfigured.mockReturnValue(true);
+    await sources.create({
+      filename: 'empty.json',
+      content: {
+        tareas_con_objetivo: [{ id: 'x', label: 'done', avance_base: 100 }],
+      },
+    });
+    await (
+      service as unknown as {
+        sendNextTaskChecklistAsk: (
+          contact: (typeof contacts.store)[0],
+          slotKey: string,
+        ) => Promise<void>;
+      }
+    ).sendNextTaskChecklistAsk(lead, 'slot-b');
+    expect(
+      messages.store.filter((row) => row.source === 'task_checklist'),
+    ).toHaveLength(0);
+    expect(await service.listTaskChecklists({ slotKey: 'slot-b' })).toEqual([]);
+  });
+
+  it('records failed outbound StaffMessage when Evolution send fails', async () => {
+    const lead = await contacts.create({
+      phone: '5491138911798',
+      label: 'Benjamin',
+      active: true,
+      tags: ['staff'],
+      catalogSlotKey: 'slot-c',
+      catalogSlotStartAt: new Date('2026-07-15T12:00:00.000Z'),
+    });
+    await sources.create({
+      filename: 'obra.json',
+      content: {
+        tareas_con_objetivo: [
+          { id: 'carp', label: 'colocacion carpinterias', avance_base: 20 },
+        ],
+      },
+    });
+    sendInteractive.mockRejectedValueOnce(new Error('evolution down'));
+    await (
+      service as unknown as {
+        sendNextTaskChecklistAsk: (
+          contact: (typeof contacts.store)[0],
+          slotKey: string,
+        ) => Promise<void>;
+      }
+    ).sendNextTaskChecklistAsk(lead, 'slot-c');
+    const failed = messages.store.find(
+      (row) => row.source === 'task_checklist' && row.status === 'failed',
+    );
+    expect(failed?.taskId).toBe('carp');
   });
 });

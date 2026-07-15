@@ -17,6 +17,7 @@ export const MESSAGING_CACHE_PATHS = {
   ciclos: '/messaging/ciclos',
   roster: '/messaging/roster',
   catalog: '/messaging/catalog',
+  taskChecklist: '/messaging/task-checklist',
   workStatus: (cicloId?: string) =>
     cicloId
       ? `/messaging/work-status?cicloId=${cicloId}`

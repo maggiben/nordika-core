@@ -4,6 +4,10 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { ACCOUNT_MODEL, accountSchema } from '../auth/auth.schema';
 import { LocaleService } from '../i18n/locale.service';
 import { getMongoUri } from '../mongo/mongo.config';
+import {
+  SOURCE_OF_TRUTH_MODEL,
+  sourceOfTruthSchema,
+} from '../sources/source.schema';
 import { EvolutionClient } from './evolution.client';
 import { MessagingController } from './messaging.controller';
 import { getMessagingModelDefinitions } from './messaging.models';
@@ -27,6 +31,7 @@ export class MessagingModule {
         MongooseModule.forFeature([
           ...models,
           { name: ACCOUNT_MODEL, schema: accountSchema },
+          { name: SOURCE_OF_TRUTH_MODEL, schema: sourceOfTruthSchema },
         ]),
       ],
       controllers: [MessagingController, MessagingWebhookController],

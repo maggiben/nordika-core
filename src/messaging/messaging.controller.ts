@@ -117,6 +117,16 @@ export class MessagingController {
     return this.messaging.listStaffRoster();
   }
 
+  @Get('task-checklist')
+  @MessageAdminOnly
+  @CacheTTL(CACHE_TTLS.MESSAGING_DYNAMIC_MS)
+  listTaskChecklists(
+    @Query('contactId') contactId?: string,
+    @Query('slotKey') slotKey?: string,
+  ) {
+    return this.messaging.listTaskChecklists({ contactId, slotKey });
+  }
+
   @Post('catalog')
   createCatalogMessage(
     @Body() dto: CreateCatalogMessageDto,

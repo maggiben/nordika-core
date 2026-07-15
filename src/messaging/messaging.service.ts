@@ -24,6 +24,10 @@ import {
 } from '../config/environment';
 import { LocaleService } from '../i18n/locale.service';
 import { normalizeLanguage } from '../i18n/languages';
+import {
+  SOURCE_OF_TRUTH_MODEL,
+  type SourceOfTruth,
+} from '../sources/source.schema';
 import { EvolutionClient } from './evolution.client';
 import {
   CreateCatalogMessageDto,
@@ -60,6 +64,7 @@ import {
   WhatsAppContactDocument,
   WorkStatusDocument,
 } from './messaging.schema';
+import { extractPendingObjectiveTasks } from './pending-objective-tasks';
 import {
   computeResponseLatencyMs,
   responseStatusFromLatencyMs,
@@ -109,6 +114,21 @@ export interface StaffCatalogRow {
   responseStatus: string;
 }
 
+export interface TaskChecklistRow {
+  _id: string;
+  sourceId: string | null;
+  taskId: string;
+  taskLabel: string;
+  contactId: string;
+  phone: string;
+  slotKey: string | null;
+  askedAt: string;
+  answeredAt: string | null;
+  replyBody: string | null;
+  inboundMessageId: string | null;
+  status: 'pending' | 'answered' | 'failed';
+}
+
 @Injectable()
 export class MessagingService {
   private readonly logger = new Logger(MessagingService.name);
@@ -132,6 +152,8 @@ export class MessagingService {
     private readonly messages: Model<StaffMessageDocument>,
     @InjectModel(STAFF_CATALOG_MESSAGE_MODEL)
     private readonly catalog: Model<StaffCatalogMessageDocument>,
+    @InjectModel(SOURCE_OF_TRUTH_MODEL)
+    private readonly sources: Model<SourceOfTruth & { _id: Types.ObjectId }>,
     @InjectModel(ACCOUNT_MODEL)
     private readonly accounts: Model<AccountDocument>,
     private readonly evolution: EvolutionClient,
@@ -1204,6 +1226,7 @@ export class MessagingService {
       phone: contact.phone,
       direction: 'inbound',
       body: replyBody,
+      questionMessageId: openThread?._id,
       status: 'received',
       providerMessageId: dto.providerMessageId,
       receivedAt: repliedAt,
@@ -1211,6 +1234,10 @@ export class MessagingService {
       threadId: threadId ?? undefined,
       source: 'webhook',
       catalogMessageId: openThread?.catalogMessageId,
+      taskId: openThread?.taskId,
+      taskLabel: openThread?.taskLabel,
+      sourceId: openThread?.sourceId,
+      slotKey: openThread?.slotKey,
       title: openThread?.title,
       responseLatencyMs: responseLatencyMs ?? undefined,
       responseStatus: responseStatus ?? undefined,
@@ -1232,11 +1259,28 @@ export class MessagingService {
           `Failed to advance catalog sequence after ${String(openThread.catalogMessageId)}: ${message}`,
         );
       }
+    } else if (
+      isMeaningfulReply &&
+      openThread?.taskId &&
+      openThread.source === 'task_checklist'
+    ) {
+      try {
+        await this.advanceTaskChecklistAfterReply(openThread);
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Unknown task checklist advance error';
+        this.logger.error(
+          `Failed to advance task checklist after ${openThread.taskId}: ${message}`,
+        );
+      }
     }
 
     await this.cache.invalidatePaths([
       MESSAGING_CACHE_PATHS.roster,
       MESSAGING_CACHE_PATHS.catalog,
+      MESSAGING_CACHE_PATHS.taskChecklist,
     ]);
     return {
       ok: true,
@@ -1331,6 +1375,10 @@ export class MessagingService {
       });
       catalogSent = catalogResult.sent;
       catalogFailed = catalogResult.failed;
+
+      if (catalogSlotKey) {
+        await this.kickoffTaskChecklists(catalogSlotKey);
+      }
 
       try {
         whatsappSummaries = await this.runWeeklyStatusDispatch(asOf);
@@ -2021,7 +2069,11 @@ export class MessagingService {
       allowRestart: false,
       slotStart,
     });
-    if (!sequence.next || sequence.awaitingReply) {
+    if (sequence.awaitingReply) {
+      return;
+    }
+    if (!sequence.next) {
+      await this.tryStartTaskChecklistForContact(lead);
       return;
     }
     if (String(sequence.next._id) === String(current._id)) {
@@ -2033,6 +2085,266 @@ export class MessagingService {
       { contactId: String(lead._id) },
       { catalogSlotStart: slotStart },
     );
+  }
+
+  async listTaskChecklists(
+    filters: {
+      contactId?: string;
+      slotKey?: string;
+    } = {},
+  ): Promise<TaskChecklistRow[]> {
+    const query: Record<string, unknown> = {
+      direction: 'outbound',
+      source: 'task_checklist',
+    };
+    if (filters.contactId?.trim()) {
+      query.contactId = this.toObjectId(filters.contactId, 'contact');
+    }
+    if (filters.slotKey?.trim()) {
+      query.slotKey = filters.slotKey.trim();
+    }
+    const rows = await this.messages
+      .find(query)
+      .sort({ sentAt: -1, createdAt: -1 })
+      .limit(200)
+      .exec();
+
+    const result: TaskChecklistRow[] = [];
+    for (const row of rows) {
+      const inbound = row.repliedAt
+        ? await this.messages
+            .findOne({
+              direction: 'inbound',
+              threadId: row.threadId ?? row._id,
+              status: 'received',
+            })
+            .sort({ receivedAt: -1 })
+            .exec()
+        : null;
+      const status: TaskChecklistRow['status'] =
+        row.status === 'failed'
+          ? 'failed'
+          : row.repliedAt
+            ? 'answered'
+            : 'pending';
+      result.push({
+        _id: String(row._id),
+        sourceId: row.sourceId ? String(row.sourceId) : null,
+        taskId: row.taskId ?? '',
+        taskLabel: row.taskLabel ?? row.title ?? '',
+        contactId: String(row.contactId),
+        phone: row.phone,
+        slotKey: row.slotKey ?? null,
+        askedAt: (row.sentAt ?? new Date()).toISOString(),
+        answeredAt: row.repliedAt ? row.repliedAt.toISOString() : null,
+        replyBody: row.replyBody ?? inbound?.body ?? null,
+        inboundMessageId: inbound ? String(inbound._id) : null,
+        status,
+      });
+    }
+    return result;
+  }
+
+  private async kickoffTaskChecklists(slotKey: string): Promise<void> {
+    const assigned = await this.catalog
+      .find({
+        active: true,
+        assignedContactId: { $exists: true, $ne: null },
+      })
+      .exec();
+    const contactIds = [
+      ...new Set(
+        assigned
+          .map((item) =>
+            item.assignedContactId ? String(item.assignedContactId) : null,
+          )
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    for (const contactId of contactIds) {
+      const contact = await this.contacts
+        .findById(this.toObjectId(contactId, 'contact'))
+        .exec();
+      if (!contact?.active) {
+        continue;
+      }
+      if (contact.catalogSlotKey && contact.catalogSlotKey !== slotKey) {
+        continue;
+      }
+      await this.tryStartTaskChecklistForContact(contact);
+    }
+  }
+
+  private async tryStartTaskChecklistForContact(
+    contact: WhatsAppContactDocument,
+  ): Promise<void> {
+    const slotKey = contact.catalogSlotKey;
+    if (!slotKey) {
+      return;
+    }
+    const sequence = await this.resolveNextCatalogSend(contact._id, {
+      allowRestart: false,
+      slotStart: contact.catalogSlotStartAt ?? undefined,
+    });
+    if (sequence.next) {
+      return;
+    }
+    await this.sendNextTaskChecklistAsk(contact, slotKey);
+  }
+
+  private async sendNextTaskChecklistAsk(
+    contact: WhatsAppContactDocument,
+    slotKey: string,
+  ): Promise<void> {
+    if (!this.evolution.isConfigured()) {
+      return;
+    }
+
+    const openAsk = await this.messages
+      .findOne({
+        contactId: contact._id,
+        slotKey,
+        direction: 'outbound',
+        source: 'task_checklist',
+        status: 'sent',
+        repliedAt: { $exists: false },
+      })
+      .exec();
+    if (openAsk) {
+      return;
+    }
+
+    const loaded = await this.loadPendingObjectiveTasksFromLatestSource();
+    if (!loaded) {
+      return;
+    }
+    const { sourceId, tasks } = loaded;
+    if (tasks.length === 0) {
+      return;
+    }
+
+    const prior = await this.messages
+      .find({
+        contactId: contact._id,
+        slotKey,
+        direction: 'outbound',
+        source: 'task_checklist',
+        status: 'sent',
+      })
+      .exec();
+    const doneIds = new Set(
+      prior.map((row) => row.taskId).filter((id): id is string => Boolean(id)),
+    );
+    const nextIndex = tasks.findIndex((task) => !doneIds.has(task.taskId));
+    if (nextIndex < 0) {
+      return;
+    }
+    const task = tasks[nextIndex];
+    const step = nextIndex + 1;
+    const total = tasks.length;
+    const labeledTitle = `Tarea ${step}/${total} · ${task.label}`;
+    const body = `¿Cómo va la tarea "${task.label}"? Contanos el avance actual de la obra.`;
+    const askedAt = new Date();
+
+    const language = normalizeLanguage(
+      contact.language,
+      getWhatsAppDefaultLanguage(),
+    );
+    const interactive: InteractiveTemplateBody = {
+      text: body,
+      title: labeledTitle,
+      widgets: [],
+    };
+
+    try {
+      const result = await this.evolution.sendInteractive(
+        contact.phone,
+        interactive,
+        body,
+        language,
+      );
+      await this.recordStaffMessage({
+        contactId: contact._id,
+        phone: contact.phone,
+        direction: 'outbound',
+        title: labeledTitle,
+        body,
+        taskId: task.taskId,
+        taskLabel: task.label,
+        sourceId,
+        slotKey,
+        status: 'sent',
+        providerMessageId: result.providerMessageId,
+        sentAt: askedAt,
+        receivedAt: askedAt,
+        responseStatus: 'pending',
+        source: 'task_checklist',
+      });
+      this.logger.log(
+        `Task checklist ${step}/${total} for ${contact.phone}: ${task.label}`,
+      );
+      await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.taskChecklist]);
+    } catch (error) {
+      await this.recordStaffMessage({
+        contactId: contact._id,
+        phone: contact.phone,
+        direction: 'outbound',
+        title: labeledTitle,
+        body,
+        taskId: task.taskId,
+        taskLabel: task.label,
+        sourceId,
+        slotKey,
+        status: 'failed',
+        error: error instanceof Error ? error.message : 'unknown error',
+        sentAt: askedAt,
+        source: 'task_checklist',
+      });
+      this.logger.warn(
+        `Task checklist send failed for ${contact.phone} ${task.taskId}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
+  }
+
+  private async advanceTaskChecklistAfterReply(
+    openThread: StaffMessageDocument,
+  ): Promise<void> {
+    if (!openThread.taskId || !openThread.contactId) {
+      return;
+    }
+    const contact = await this.contacts.findById(openThread.contactId).exec();
+    if (!contact?.active || !contact.catalogSlotKey) {
+      return;
+    }
+    await this.sendNextTaskChecklistAsk(contact, contact.catalogSlotKey);
+  }
+
+  private async loadPendingObjectiveTasksFromLatestSource(): Promise<{
+    sourceId: Types.ObjectId;
+    tasks: ReturnType<typeof extractPendingObjectiveTasks>;
+  } | null> {
+    const rows = await this.sources.find({}).exec();
+    if (!rows.length) {
+      return null;
+    }
+    const latest = [...rows].sort((left, right) => {
+      const leftAt =
+        (left as { createdAt?: Date }).createdAt?.getTime() ??
+        left._id.getTimestamp().getTime();
+      const rightAt =
+        (right as { createdAt?: Date }).createdAt?.getTime() ??
+        right._id.getTimestamp().getTime();
+      return rightAt - leftAt;
+    })[0];
+    if (!latest?._id) {
+      return null;
+    }
+    return {
+      sourceId: latest._id,
+      tasks: extractPendingObjectiveTasks(latest.content),
+    };
   }
 
   /**

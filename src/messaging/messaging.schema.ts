@@ -91,12 +91,22 @@ export interface StaffMessage {
   threadId?: Types.ObjectId;
   /** Full WhatsApp body text. Never truncated in storage. */
   body: string;
+  /**
+   * On inbound replies: id of the outbound StaffMessage question this answers.
+   */
+  questionMessageId?: Types.ObjectId;
   /** Full staff reply text when this outbound thread was answered. */
   replyBody?: string;
   status: 'sent' | 'failed' | 'received';
   providerMessageId?: string;
   error?: string;
-  source?: 'test' | 'remind' | 'dispatch' | 'catalog' | 'webhook';
+  source?:
+    'test' | 'remind' | 'dispatch' | 'catalog' | 'webhook' | 'task_checklist';
+  /** Objective-task ask metadata (task_checklist source). */
+  taskId?: string;
+  taskLabel?: string;
+  sourceId?: Types.ObjectId;
+  slotKey?: string;
   sentAt?: Date;
   /** When the recipient is considered to have received the outbound ask (usually sentAt). */
   receivedAt?: Date;
@@ -257,6 +267,11 @@ export const staffMessageSchema: Schema<StaffMessage> =
         index: true,
       },
       body: { type: String, required: true },
+      questionMessageId: {
+        type: Schema.Types.ObjectId,
+        ref: STAFF_MESSAGE_MODEL,
+        index: true,
+      },
       replyBody: { type: String },
       status: {
         type: String,
@@ -267,8 +282,23 @@ export const staffMessageSchema: Schema<StaffMessage> =
       error: String,
       source: {
         type: String,
-        enum: ['test', 'remind', 'dispatch', 'catalog', 'webhook'],
+        enum: [
+          'test',
+          'remind',
+          'dispatch',
+          'catalog',
+          'webhook',
+          'task_checklist',
+        ],
       },
+      taskId: { type: String, trim: true, index: true },
+      taskLabel: { type: String, trim: true },
+      sourceId: {
+        type: Schema.Types.ObjectId,
+        ref: 'SourceOfTruth',
+        index: true,
+      },
+      slotKey: { type: String, trim: true, index: true },
       sentAt: Date,
       receivedAt: Date,
       repliedAt: Date,
@@ -288,6 +318,7 @@ staffMessageSchema.index({
   repliedAt: 1,
   sentAt: -1,
 });
+staffMessageSchema.index({ contactId: 1, slotKey: 1, taskId: 1, direction: 1 });
 
 export const staffCatalogMessageSchema: Schema<StaffCatalogMessage> =
   new Schema<StaffCatalogMessage>(

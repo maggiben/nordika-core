@@ -15,6 +15,7 @@ describe('MessagingController', () => {
   const listWorkStatuses = jest.fn();
   const listDispatches = jest.fn();
   const listStaffRoster = jest.fn();
+  const listTaskChecklists = jest.fn();
   const createCatalogMessage = jest.fn();
   const listCatalogMessages = jest.fn();
   const updateCatalogMessage = jest.fn();
@@ -40,6 +41,7 @@ describe('MessagingController', () => {
     listWorkStatuses,
     listDispatches,
     listStaffRoster,
+    listTaskChecklists,
     createCatalogMessage,
     listCatalogMessages,
     updateCatalogMessage,
@@ -89,6 +91,7 @@ describe('MessagingController', () => {
     await controller.listWorkStatuses('id');
     await controller.listDispatches('id');
     await controller.listStaffRoster();
+    await controller.listTaskChecklists('c1', 'slot-key');
     await controller.createCatalogMessage({
       title: 'Hola',
       body: 'Mensaje',
@@ -112,6 +115,10 @@ describe('MessagingController', () => {
     expect(runWeeklyStatusDispatch).toHaveBeenCalled();
     expect(upsertWorkStatus).toHaveBeenCalled();
     expect(listStaffRoster).toHaveBeenCalled();
+    expect(listTaskChecklists).toHaveBeenCalledWith({
+      contactId: 'c1',
+      slotKey: 'slot-key',
+    });
     expect(createCatalogMessage).toHaveBeenCalled();
     expect(sendCatalogMessage).toHaveBeenCalledWith('id', { contactId: 'c1' });
     expect(reorderCatalogMessages).toHaveBeenCalledWith({
