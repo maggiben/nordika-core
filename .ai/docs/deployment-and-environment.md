@@ -15,8 +15,13 @@
 - `APP_URL` is the BFF's public URL used for verification and reset links.
 - `RESEND_API_KEY` and `RESEND_FROM` are required to deliver verification and
   password-reset email. `RESEND_FROM` must be a Resend-verified sender.
+- `EVOLUTION_API_URL`, `EVOLUTION_API_KEY`, and `EVOLUTION_INSTANCE` are optional
+  as a group. When set, weekly WhatsApp status dispatch can send through
+  Evolution. `WHATSAPP_WEEKLY_CRON` (default `0 9 * * 1`) and
+  `WHATSAPP_TIMEZONE` (default `America/Argentina/Buenos_Aires`) control the
+  scheduler.
 
-`MongoModule` activates Mongoose only when one of the MongoDB URL variables is configured. The value must begin with `mongodb://` or `mongodb+srv://`; the application does not log the URL. Authentication requires MongoDB plus non-empty `JWT_SECRET`, `APP_URL`, `RESEND_API_KEY`, and `RESEND_FROM`. Core returns access and opaque refresh tokens as JSON; the frontend BFF stores them as secure HttpOnly cookies. Configure these values in a secure secret store, never in committed `.env` files.
+`MongoModule` activates Mongoose only when one of the MongoDB URL variables is configured. The value must begin with `mongodb://` or `mongodb+srv://`; the application does not log the URL. Authentication requires MongoDB plus non-empty `JWT_SECRET`, `APP_URL`, `RESEND_API_KEY`, and `RESEND_FROM`. Messaging routes register only when MongoDB is configured; WhatsApp sending additionally requires the Evolution variables. Configure these values in a secure secret store, never in committed `.env` files.
 
 For local development, copy `.env.example` to an untracked `.env` file and
 replace every placeholder with local values.

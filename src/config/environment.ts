@@ -3,6 +3,9 @@ const REDIS_PROTOCOL_PATTERN = /^rediss?:\/\//;
 
 export interface Environment {
   APP_URL?: string;
+  EVOLUTION_API_KEY?: string;
+  EVOLUTION_API_URL?: string;
+  EVOLUTION_INSTANCE?: string;
   JWT_SECRET?: string;
   MONGO_URI?: string;
   MONGO_URL?: string;
@@ -10,6 +13,14 @@ export interface Environment {
   REDIS_URL?: string;
   RESEND_API_KEY?: string;
   RESEND_FROM?: string;
+  WHATSAPP_TIMEZONE?: string;
+  WHATSAPP_WEEKLY_CRON?: string;
+}
+
+export interface EvolutionConfig {
+  apiKey: string;
+  baseUrl: string;
+  instance: string;
 }
 
 export interface AuthConfig {
@@ -95,4 +106,43 @@ export function getRedisUrl(
   }
 
   return url;
+}
+
+export function getEvolutionConfig(
+  environment: Environment = process.env,
+): EvolutionConfig | null {
+  const baseUrl = environment.EVOLUTION_API_URL?.trim();
+  const apiKey = environment.EVOLUTION_API_KEY?.trim();
+  const instance = environment.EVOLUTION_INSTANCE?.trim();
+
+  if (!baseUrl && !apiKey && !instance) {
+    return null;
+  }
+
+  if (!baseUrl || !apiKey || !instance) {
+    throw new Error(
+      'EVOLUTION_API_URL, EVOLUTION_API_KEY, and EVOLUTION_INSTANCE must all be set together.',
+    );
+  }
+
+  try {
+    const parsed = new URL(baseUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('EVOLUTION_API_URL must be a valid absolute URL.');
+    }
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === 'EVOLUTION_API_URL must be a valid absolute URL.'
+    ) {
+      throw error;
+    }
+    throw new Error('EVOLUTION_API_URL must be a valid absolute URL.');
+  }
+
+  return {
+    apiKey,
+    baseUrl: baseUrl.replace(/\/$/, ''),
+    instance,
+  };
 }

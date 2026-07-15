@@ -1,5 +1,22 @@
 # External APIs
 
-No external APIs are configured or invoked by the application. The only exposed API is local HTTP `GET /`, which responds with `Hello World!`.
+## Resend
 
-When adding an external integration, document its base URL/configuration, timeout, retry policy, authentication material, error mapping, rate limits, data classification, test double, and ownership. Do not place raw client calls in controllers.
+Transactional email for account verification and password reset. Configuration:
+`RESEND_API_KEY`, `RESEND_FROM`. Used only from `AuthService`.
+
+## Evolution API (WhatsApp)
+
+Optional WhatsApp gateway for weekly ciclo status messages. Configuration:
+
+- `EVOLUTION_API_URL`
+- `EVOLUTION_API_KEY`
+- `EVOLUTION_INSTANCE`
+
+All three are required together; when omitted, messaging APIs remain available
+for CRUD but `POST /messaging/dispatch/run` returns 503 and the weekly cron
+logs a skip.
+
+Transport logic lives in `EvolutionClient` (not controllers). Button widgets map
+to Evolution `sendButtons`; text-only / input / checkbox prompts use
+`sendText` with instructions embedded in the body.

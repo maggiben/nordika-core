@@ -5,6 +5,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { RedisCacheModule } from './cache/redis-cache.module';
+import { MessagingModule } from './messaging/messaging.module';
 import { MongoModule } from './mongo/mongo.module';
 import { SourcesModule } from './sources/sources.module';
 
@@ -13,6 +14,7 @@ import { SourcesModule } from './sources/sources.module';
     MongoModule.register(),
     RedisCacheModule.register(),
     AuthModule.register(),
+    MessagingModule.register(),
     SourcesModule,
     ThrottlerModule.forRoot({
       throttlers: [
