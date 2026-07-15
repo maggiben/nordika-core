@@ -1,5 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type { InteractiveTemplateBody, TemplateWidget } from './messaging.schema';
+import type {
+  InteractiveTemplateBody,
+  TemplateWidget,
+} from './messaging.schema';
 
 export interface EvolutionConfig {
   apiKey: string;

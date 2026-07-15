@@ -11,7 +11,7 @@ Use this as the final change checklist. Mark an item complete only with current-
 - [ ] Documentation is updated for changed contracts, commands, environment variables, architecture, or operations.
 - [ ] Types compile: `pnpm run build`.
 - [ ] Formatting is applied: `pnpm run format`.
-- [ ] Lint passes: `pnpm run lint` (inspect changes because this command runs ESLint with `--fix`).
+- [ ] Lint passes: `pnpm run lint:check` (pre-commit gate; use `pnpm run lint` locally to auto-fix).
 - [ ] Build succeeds: `pnpm run build`.
 - [ ] Accessibility passes, or is explicitly not applicable because this is server-only code with no UI; any introduced UI needs a dedicated accessibility review.
 - [ ] Security review/scan passes for the changed attack surface; use `.ai/harnesses/security-audit.md` and record the tool/scope.

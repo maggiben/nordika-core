@@ -7,6 +7,8 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { MESSAGING_CACHE_PATHS } from '../cache/cache.constants';
+import { OptionalCacheService } from '../cache/optional-cache.service';
 import { EvolutionClient } from './evolution.client';
 import {
   CreateCicloDto,
@@ -64,6 +66,7 @@ export class MessagingService {
     @InjectModel(MESSAGE_DISPATCH_MODEL)
     private readonly dispatches: Model<MessageDispatchDocument>,
     private readonly evolution: EvolutionClient,
+    private readonly cache: OptionalCacheService,
   ) {}
 
   normalizePhone(phone: string): string {
@@ -77,12 +80,14 @@ export class MessagingService {
   }
 
   async createContact(dto: CreateContactDto): Promise<WhatsAppContactDocument> {
-    return this.contacts.create({
+    const contact = await this.contacts.create({
       phone: this.normalizePhone(dto.phone),
       label: dto.label,
       active: dto.active ?? true,
       tags: dto.tags ?? [],
     });
+    await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.contacts]);
+    return contact;
   }
 
   async listContacts(): Promise<WhatsAppContactDocument[]> {
@@ -102,6 +107,7 @@ export class MessagingService {
     if (!contact) {
       throw new NotFoundException('Contact not found.');
     }
+    await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.contacts]);
     return contact;
   }
 
@@ -109,7 +115,7 @@ export class MessagingService {
     dto: CreateTemplateDto,
   ): Promise<MessageTemplateDocument> {
     const body = this.validateTemplateBody(dto.body);
-    return this.templates.create({
+    const template = await this.templates.create({
       key: dto.key.trim(),
       name: dto.name.trim(),
       description: dto.description,
@@ -117,6 +123,8 @@ export class MessagingService {
       body,
       active: dto.active ?? true,
     });
+    await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.templates]);
+    return template;
   }
 
   async listTemplates(): Promise<MessageTemplateDocument[]> {
@@ -147,6 +155,7 @@ export class MessagingService {
     if (!template) {
       throw new NotFoundException('Template not found.');
     }
+    await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.templates]);
     return template;
   }
 
@@ -157,7 +166,9 @@ export class MessagingService {
       throw new BadRequestException('Invalid ciclo_inicio or ciclo_fin.');
     }
     if (fin.getTime() < inicio.getTime()) {
-      throw new BadRequestException('ciclo_fin must be on or after ciclo_inicio.');
+      throw new BadRequestException(
+        'ciclo_fin must be on or after ciclo_inicio.',
+      );
     }
 
     const template = await this.templates
@@ -169,13 +180,15 @@ export class MessagingService {
       );
     }
 
-    return this.ciclos.create({
+    const ciclo = await this.ciclos.create({
       name: dto.name.trim(),
       ciclo_inicio: inicio,
       ciclo_fin: fin,
       templateKey: dto.templateKey,
       active: dto.active ?? true,
     });
+    await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.ciclos]);
+    return ciclo;
   }
 
   async listCiclos(): Promise<CicloDocument[]> {
@@ -214,10 +227,14 @@ export class MessagingService {
       existing.active = dto.active;
     }
     if (existing.ciclo_fin.getTime() < existing.ciclo_inicio.getTime()) {
-      throw new BadRequestException('ciclo_fin must be on or after ciclo_inicio.');
+      throw new BadRequestException(
+        'ciclo_fin must be on or after ciclo_inicio.',
+      );
     }
 
-    return existing.save();
+    const saved = await existing.save();
+    await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.ciclos]);
+    return saved;
   }
 
   async upsertWorkStatus(
@@ -229,7 +246,7 @@ export class MessagingService {
       throw new NotFoundException('Ciclo not found.');
     }
 
-    return this.workStatuses
+    const status = await this.workStatuses
       .findOneAndUpdate(
         { cicloId, weekNumber: dto.weekNumber },
         {
@@ -241,9 +258,19 @@ export class MessagingService {
           notes: dto.notes,
           asOf: dto.asOf ? new Date(dto.asOf) : new Date(),
         },
-        { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true },
+        {
+          upsert: true,
+          new: true,
+          runValidators: true,
+          setDefaultsOnInsert: true,
+        },
       )
       .exec();
+    await this.cache.invalidatePaths([
+      MESSAGING_CACHE_PATHS.workStatus(),
+      MESSAGING_CACHE_PATHS.workStatus(dto.cicloId),
+    ]);
+    return status;
   }
 
   async listWorkStatuses(cicloId?: string): Promise<WorkStatusDocument[]> {
@@ -257,7 +284,11 @@ export class MessagingService {
     const filter = cicloId
       ? { cicloId: this.toObjectId(cicloId, 'ciclo') }
       : {};
-    return this.dispatches.find(filter).sort({ createdAt: -1 }).limit(200).exec();
+    return this.dispatches
+      .find(filter)
+      .sort({ createdAt: -1 })
+      .limit(200)
+      .exec();
   }
 
   async runWeeklyStatusDispatch(
@@ -405,6 +436,13 @@ export class MessagingService {
         skipped,
       });
     }
+
+    await this.cache.invalidatePaths([
+      MESSAGING_CACHE_PATHS.dispatches(),
+      ...summaries.map((summary) =>
+        MESSAGING_CACHE_PATHS.dispatches(summary.cicloId),
+      ),
+    ]);
 
     return summaries;
   }

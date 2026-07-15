@@ -14,11 +14,20 @@ describe('RolesGuard', () => {
   });
 
   it('allows users with the required role', () => {
-    expect(guard.canActivate(contextWithRoles([SOURCE_WRITER_ROLE]))).toBe(true);
+    expect(guard.canActivate(contextWithRoles([SOURCE_WRITER_ROLE]))).toBe(
+      true,
+    );
   });
 
   it('rejects users without the required role', () => {
     expect(guard.canActivate(contextWithRoles(['reader']))).toBe(false);
+  });
+
+  it('allows requests when no roles are required', () => {
+    getAllAndOverride.mockReturnValueOnce(undefined);
+    expect(guard.canActivate(contextWithRoles([]))).toBe(true);
+    getAllAndOverride.mockReturnValueOnce([]);
+    expect(guard.canActivate(contextWithRoles([]))).toBe(true);
   });
 
   function contextWithRoles(roles: string[]): ExecutionContext {

@@ -24,9 +24,9 @@ describe('EvolutionClient', () => {
   it('sends text when there are no buttons', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ key: { id: 'msg-1' } }),
+      json: () => Promise.resolve({ key: { id: 'msg-1' } }),
     });
-    global.fetch = fetchMock as unknown as typeof fetch;
+    global.fetch = fetchMock;
 
     const client = new EvolutionClient({
       apiKey: 'key',
@@ -39,7 +39,12 @@ describe('EvolutionClient', () => {
       {
         text: 'hello',
         widgets: [
-          { type: 'input', id: 'comment', label: 'Comentario' },
+          {
+            type: 'input',
+            id: 'comment',
+            label: 'Comentario',
+            placeholder: '...',
+          },
           {
             type: 'checkbox',
             id: 'ok',
@@ -61,9 +66,9 @@ describe('EvolutionClient', () => {
   it('sends buttons when button widgets are present', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({}),
+      json: () => Promise.resolve({}),
     });
-    global.fetch = fetchMock as unknown as typeof fetch;
+    global.fetch = fetchMock;
 
     const client = new EvolutionClient({
       apiKey: 'key',
@@ -77,7 +82,23 @@ describe('EvolutionClient', () => {
         title: 'Status',
         text: '30%',
         footer: 'Nodika',
-        widgets: [{ type: 'button', id: 'ack', label: 'Recibido' }],
+        widgets: [
+          { type: 'button', id: 'ack', label: 'Recibido' },
+          {
+            type: 'button',
+            id: 'site',
+            label: 'Sitio',
+            action: 'url',
+            url: 'https://nodika.example',
+          },
+          {
+            type: 'button',
+            id: 'call',
+            label: 'Llamar',
+            action: 'call',
+            phoneNumber: '5491112345678',
+          },
+        ],
       },
       '30%',
     );
@@ -88,12 +109,11 @@ describe('EvolutionClient', () => {
     );
   });
 
-  it('throws when Evolution returns a non-OK status', async () => {
+  it('tolerates invalid JSON bodies from Evolution', async () => {
     global.fetch = jest.fn().mockResolvedValue({
-      ok: false,
-      status: 500,
-      json: async () => ({ error: 'boom' }),
-    }) as unknown as typeof fetch;
+      ok: true,
+      json: () => Promise.reject(new Error('bad json')),
+    });
 
     const client = new EvolutionClient({
       apiKey: 'key',
@@ -102,11 +122,25 @@ describe('EvolutionClient', () => {
     });
 
     await expect(
-      client.sendInteractive(
-        '5491112345678',
-        { text: 'x', widgets: [] },
-        'x',
-      ),
+      client.sendInteractive('5491112345678', { text: 'x', widgets: [] }, 'x'),
+    ).resolves.toEqual({ providerMessageId: undefined, raw: undefined });
+  });
+
+  it('throws when Evolution returns a non-OK status', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: () => Promise.resolve({ error: 'boom' }),
+    });
+
+    const client = new EvolutionClient({
+      apiKey: 'key',
+      baseUrl: 'https://evolution.example',
+      instance: 'nodika',
+    });
+
+    await expect(
+      client.sendInteractive('5491112345678', { text: 'x', widgets: [] }, 'x'),
     ).rejects.toThrow('Evolution API request failed with status 500.');
   });
 });

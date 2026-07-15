@@ -15,13 +15,13 @@ describe('SourcesService', () => {
     const connection = { model, models: {} } as unknown as Connection;
     const service = new SourcesService(connection);
 
-    await expect(service.create('source.json', { enabled: true })).resolves.toEqual(
-      {
-        id: 'source-id',
-        filename: 'source.json',
-        createdAt,
-      },
-    );
+    await expect(
+      service.create('source.json', { enabled: true }),
+    ).resolves.toEqual({
+      id: 'source-id',
+      filename: 'source.json',
+      createdAt,
+    });
     expect(create).toHaveBeenCalledWith({
       content: { enabled: true },
       filename: 'source.json',

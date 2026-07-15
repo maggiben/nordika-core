@@ -74,7 +74,9 @@ export function getJwtSecret(environment: Environment = process.env): string {
   return secret;
 }
 
-export function getAuthConfig(environment: Environment = process.env): AuthConfig {
+export function getAuthConfig(
+  environment: Environment = process.env,
+): AuthConfig {
   const resendApiKey = environment.RESEND_API_KEY?.trim();
   const resendFrom = environment.RESEND_FROM?.trim();
   const appUrl = environment.APP_URL?.trim();

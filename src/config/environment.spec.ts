@@ -1,4 +1,5 @@
 import {
+  getAuthConfig,
   getEvolutionConfig,
   getJwtSecret,
   getMongoUri,
@@ -73,5 +74,36 @@ describe('environment validation', () => {
         EVOLUTION_INSTANCE: 'nodika',
       }),
     ).toThrow('EVOLUTION_API_URL must be a valid absolute URL.');
+  });
+
+  it('accepts a complete Evolution configuration', () => {
+    expect(
+      getEvolutionConfig({
+        EVOLUTION_API_URL: 'https://wa.example/',
+        EVOLUTION_API_KEY: 'secret',
+        EVOLUTION_INSTANCE: 'nodika',
+      }),
+    ).toEqual({
+      apiKey: 'secret',
+      baseUrl: 'https://wa.example',
+      instance: 'nodika',
+    });
+  });
+
+  it('requires and validates auth email delivery settings', () => {
+    expect(() => getAuthConfig({})).toThrow(
+      'APP_URL, RESEND_API_KEY, and RESEND_FROM must be configured for authentication.',
+    );
+    expect(
+      getAuthConfig({
+        APP_URL: 'https://app.example/',
+        RESEND_API_KEY: 're_test',
+        RESEND_FROM: 'Nodika <auth@example.com>',
+      }),
+    ).toMatchObject({
+      appUrl: 'https://app.example',
+      resendApiKey: 're_test',
+      resendFrom: 'Nodika <auth@example.com>',
+    });
   });
 });

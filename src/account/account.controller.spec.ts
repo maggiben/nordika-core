@@ -44,13 +44,10 @@ describe('AccountController', () => {
   it('changes passwords for the authenticated account', async () => {
     auth.changePassword.mockResolvedValue(undefined);
     await expect(
-      controller.changePassword(
-        { user: { subject: 'account-id' } } as never,
-        {
-          currentPassword: 'old-password-12',
-          newPassword: 'new-password-12',
-        },
-      ),
+      controller.changePassword({ user: { subject: 'account-id' } } as never, {
+        currentPassword: 'old-password-12',
+        newPassword: 'new-password-12',
+      }),
     ).resolves.toEqual({ ok: true });
     expect(auth.changePassword).toHaveBeenCalledWith(
       'account-id',

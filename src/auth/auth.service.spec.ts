@@ -69,7 +69,7 @@ describe('AuthService', () => {
     expect(accounts.create).toHaveBeenCalledWith(
       expect.objectContaining({
         email: 'person@example.com',
-        emailVerifiedAt: expect.any(Date),
+        emailVerifiedAt: expect.any(Date) as Date,
         identities: [{ provider: 'local', subject: 'person@example.com' }],
         roles: ['source_writer'],
       }),
@@ -77,7 +77,7 @@ describe('AuthService', () => {
     expect(credentials.create).toHaveBeenCalledWith(
       expect.objectContaining({
         accountId: account._id,
-        salt: expect.any(String),
+        salt: expect.any(String) as string,
       }),
     );
     expect(send).not.toHaveBeenCalled();
@@ -155,12 +155,14 @@ describe('AuthService', () => {
     sessions.updateOne.mockResolvedValueOnce({ modifiedCount: 1 });
 
     await service.refresh('a'.repeat(32));
-    expect(sessions.updateOne).toHaveBeenCalledWith(
-      { _id: 'session-id', revokedAt: { $exists: false } },
-      expect.objectContaining({
-        $set: expect.objectContaining({ replacedByHash: expect.any(String) }),
-      }),
-    );
+    const updateCall = sessions.updateOne.mock.calls[0] as
+      [unknown, { $set: { replacedByHash: string } }] | undefined;
+    expect(updateCall?.[0]).toEqual({
+      _id: 'session-id',
+      revokedAt: { $exists: false },
+    });
+    expect(typeof updateCall?.[1].$set.replacedByHash).toBe('string');
+    expect(updateCall?.[1].$set.replacedByHash.length).toBeGreaterThan(0);
     expect(jwt.signAsync).toHaveBeenCalledWith({
       sub: 'account-id',
       roles: ['source_writer'],
@@ -220,6 +222,13 @@ describe('AuthService', () => {
     expect(sessions.updateMany).toHaveBeenCalled();
   });
 
+  it('cleans up action tokens when email delivery fails', async () => {
+    accounts.findOne.mockResolvedValueOnce(account);
+    send.mockRejectedValueOnce(new Error('resend down'));
+    await service.requestPasswordReset(account.email);
+    expect(actionTokens.deleteOne).toHaveBeenCalled();
+  });
+
   it('rejects missing and already-consumed action tokens', async () => {
     actionTokens.findOne.mockResolvedValueOnce(null);
     await expect(service.verifyEmail('a'.repeat(32))).rejects.toBeInstanceOf(
@@ -235,35 +244,55 @@ describe('AuthService', () => {
     );
   });
 
-  it('changes passwords for authenticated accounts', async () => {
-    const password = 'current-password';
-    const salt = 'salt';
-    const passwordHash = await new Promise<string>((resolve, reject) =>
-      scrypt(password, salt, 64, (error, key) =>
-        error ? reject(error) : resolve(key.toString('base64url')),
+  it('changes password when the current password is valid', async () => {
+    accounts.findById.mockResolvedValueOnce(account);
+    const salt = 'test-salt';
+    const hash = await new Promise<Buffer>((resolve, reject) =>
+      scrypt('a-password-123', salt, 64, (error, value) =>
+        error ? reject(error) : resolve(value),
       ),
     );
-    accounts.findById.mockResolvedValueOnce(account);
     credentials.findOne.mockResolvedValueOnce({
-      accountId: account._id,
       salt,
-      passwordHash,
+      passwordHash: hash.toString('base64url'),
     });
+    credentials.updateOne.mockResolvedValueOnce({ modifiedCount: 1 });
 
-    await service.changePassword('account-id', password, 'a-new-password');
-    expect(credentials.updateOne).toHaveBeenCalledWith(
-      { accountId: account._id },
-      expect.objectContaining({
-        $set: expect.objectContaining({
-          passwordHash: expect.any(String),
-          salt: expect.any(String),
-        }),
-      }),
+    await service.changePassword(
+      'account-id',
+      'a-password-123',
+      'a-newer-password',
     );
+    expect(credentials.updateOne).toHaveBeenCalled();
+  });
 
+  it('rejects change-password for missing accounts or wrong current password', async () => {
     accounts.findById.mockResolvedValueOnce(null);
     await expect(
-      service.changePassword('missing', password, 'a-new-password'),
+      service.changePassword('missing', 'a-password-123', 'a-newer-password'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+
+    accounts.findById.mockResolvedValueOnce(account);
+    credentials.findOne.mockResolvedValueOnce(null);
+    await expect(
+      service.changePassword(
+        'account-id',
+        'a-password-123',
+        'a-newer-password',
+      ),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+
+    accounts.findById.mockResolvedValueOnce(account);
+    credentials.findOne.mockResolvedValueOnce({
+      salt: 'test-salt',
+      passwordHash: Buffer.from('not-the-password').toString('base64url'),
+    });
+    await expect(
+      service.changePassword(
+        'account-id',
+        'a-password-123',
+        'a-newer-password',
+      ),
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 });

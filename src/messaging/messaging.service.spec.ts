@@ -4,6 +4,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { Types } from 'mongoose';
+import { OptionalCacheService } from '../cache/optional-cache.service';
 import { EvolutionClient } from './evolution.client';
 import { MessagingService } from './messaging.service';
 
@@ -16,88 +17,97 @@ function createModelMock<T extends object>() {
   const store: LeanDoc<T>[] = [];
   return {
     store,
-    create: jest.fn(async (doc: T) => {
+    create: jest.fn((doc: T) => {
       const created = { ...doc, _id: new Types.ObjectId() } as LeanDoc<T>;
-      created.save = async () => created;
+      created.save = () => Promise.resolve(created);
       store.push(created);
-      return created;
+      return Promise.resolve(created);
     }),
     find: jest.fn((filter: Record<string, unknown> = {}) => ({
       sort: () => ({
-        exec: async () =>
-          store.filter((item) =>
-            matches(item as Record<string, unknown>, filter),
-          ),
-        limit: () => ({
-          exec: async () =>
+        exec: () =>
+          Promise.resolve(
             store.filter((item) =>
               matches(item as Record<string, unknown>, filter),
             ),
+          ),
+        limit: () => ({
+          exec: () =>
+            Promise.resolve(
+              store.filter((item) =>
+                matches(item as Record<string, unknown>, filter),
+              ),
+            ),
         }),
       }),
-      exec: async () =>
-        store.filter((item) => matches(item as Record<string, unknown>, filter)),
+      exec: () =>
+        Promise.resolve(
+          store.filter((item) =>
+            matches(item as Record<string, unknown>, filter),
+          ),
+        ),
     })),
     findOne: jest.fn((filter: Record<string, unknown>) => ({
-      exec: async () =>
-        store.find((item) => matches(item as Record<string, unknown>, filter)) ??
-        null,
+      exec: () =>
+        Promise.resolve(
+          store.find((item) =>
+            matches(item as Record<string, unknown>, filter),
+          ) ?? null,
+        ),
     })),
     findById: jest.fn((id: Types.ObjectId) => ({
-      exec: async () => {
+      exec: () => {
         const found =
           store.find((item) => String(item._id) === String(id)) ?? null;
         if (found && !found.save) {
-          found.save = async () => found;
+          found.save = () => Promise.resolve(found);
         }
-        return found;
+        return Promise.resolve(found);
       },
     })),
-    findByIdAndUpdate: jest.fn(
-      (id: Types.ObjectId, update: Partial<T>) => ({
-        exec: async () => {
-          const index = store.findIndex(
-            (item) => String(item._id) === String(id),
-          );
-          if (index < 0) {
-            return null;
-          }
-          store[index] = { ...store[index], ...update };
-          return store[index];
-        },
-      }),
-    ),
+    findByIdAndUpdate: jest.fn((id: Types.ObjectId, update: Partial<T>) => ({
+      exec: () => {
+        const index = store.findIndex(
+          (item) => String(item._id) === String(id),
+        );
+        if (index < 0) {
+          return Promise.resolve(null);
+        }
+        store[index] = { ...store[index], ...update };
+        return Promise.resolve(store[index]);
+      },
+    })),
     findOneAndUpdate: jest.fn(
       (
         filter: Record<string, unknown>,
         update: Partial<T>,
         options: { upsert?: boolean } = {},
       ) => ({
-        exec: async () => {
-          const index = store.findIndex((item) =>
-            matches(item as Record<string, unknown>, filter),
-          );
+        exec: () => {
+          const index = store.findIndex((item) => matches(item, filter));
           if (index < 0) {
             if (!options.upsert) {
-              return null;
+              return Promise.resolve(null);
             }
             const created = {
               ...update,
               _id: new Types.ObjectId(),
             } as LeanDoc<T>;
             store.push(created);
-            return created;
+            return Promise.resolve(created);
           }
           store[index] = { ...store[index], ...update };
-          return store[index];
+          return Promise.resolve(store[index]);
         },
       }),
     ),
     exists: jest.fn((filter: Record<string, unknown>) => ({
-      exec: async () =>
-        store.some((item) => matches(item as Record<string, unknown>, filter))
-          ? { _id: new Types.ObjectId() }
-          : null,
+      exec: () =>
+        Promise.resolve(
+          store.some((item) => matches(item as Record<string, unknown>, filter))
+            ? { _id: new Types.ObjectId() }
+            : null,
+        ),
     })),
   };
 }
@@ -162,10 +172,20 @@ describe('MessagingService', () => {
     error?: string;
   }>();
 
+  const isConfigured = jest.fn(() => true);
+  const sendInteractive = jest.fn(() =>
+    Promise.resolve({ providerMessageId: '1' }),
+  );
+  const invalidatePaths = jest.fn(() => Promise.resolve(undefined));
+
   const evolution = {
-    isConfigured: jest.fn(() => true),
-    sendInteractive: jest.fn(async () => ({ providerMessageId: '1' })),
+    isConfigured,
+    sendInteractive,
   } as unknown as EvolutionClient;
+
+  const cache = {
+    invalidatePaths,
+  } as unknown as OptionalCacheService;
 
   let service: MessagingService;
 
@@ -180,10 +200,13 @@ describe('MessagingService', () => {
       model.store.length = 0;
       jest.clearAllMocks();
     }
-    evolution.isConfigured = jest.fn(() => true);
-    evolution.sendInteractive = jest.fn(async () => ({
-      providerMessageId: '1',
-    }));
+    isConfigured.mockReset().mockReturnValue(true);
+    sendInteractive
+      .mockReset()
+      .mockImplementation(() => Promise.resolve({ providerMessageId: '1' }));
+    invalidatePaths
+      .mockReset()
+      .mockImplementation(() => Promise.resolve(undefined));
 
     service = new MessagingService(
       contacts as never,
@@ -192,6 +215,7 @@ describe('MessagingService', () => {
       workStatuses as never,
       dispatches as never,
       evolution,
+      cache,
     );
   });
 
@@ -205,7 +229,13 @@ describe('MessagingService', () => {
       service.validateTemplateBody({
         text: 'Hi {{percent}}',
         widgets: [
-          { type: 'button', id: 'a', label: 'A', action: 'url', url: 'https://x' },
+          {
+            type: 'button',
+            id: 'a',
+            label: 'A',
+            action: 'url',
+            url: 'https://x',
+          },
           { type: 'input', id: 'b', label: 'B', placeholder: '...' },
           {
             type: 'checkbox',
@@ -277,6 +307,7 @@ describe('MessagingService', () => {
       label: 'PM',
     });
     expect(contact.phone).toBe('5491112345678');
+    expect(invalidatePaths).toHaveBeenCalledWith(['/messaging/contacts']);
     expect(await service.listContacts()).toHaveLength(1);
     await expect(
       service.updateContact(String(contact._id), { active: false }),
@@ -324,6 +355,15 @@ describe('MessagingService', () => {
         name: 'C1',
         ciclo_inicio: '2026-08-01',
         ciclo_fin: '2026-07-01',
+        templateKey: 'weekly_status',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    await expect(
+      service.createCiclo({
+        name: 'C1',
+        ciclo_inicio: 'not-a-date',
+        ciclo_fin: 'also-bad',
         templateKey: 'weekly_status',
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
@@ -456,7 +496,7 @@ describe('MessagingService', () => {
         skipped: 0,
       },
     ]);
-    expect(evolution.sendInteractive).toHaveBeenCalledWith(
+    expect(sendInteractive).toHaveBeenCalledWith(
       contact.phone,
       expect.objectContaining({
         text: 'Semana 2: 30% estructura',
@@ -518,14 +558,13 @@ describe('MessagingService', () => {
       percent: 10,
       asOf: new Date('2026-07-01T00:00:00Z'),
     });
-    evolution.sendInteractive = jest.fn(async () => {
-      throw new Error('boom');
-    });
+    sendInteractive.mockImplementation(() => Promise.reject(new Error('boom')));
 
     const summaries = await service.runWeeklyStatusDispatch(
       new Date('2026-07-01T12:00:00Z'),
     );
     expect(summaries[0]?.failed).toBe(1);
+    expect(invalidatePaths).toHaveBeenCalled();
   });
 
   it('ignores ciclos outside the date window', async () => {
@@ -542,7 +581,7 @@ describe('MessagingService', () => {
   });
 
   it('skips when Evolution is not configured', async () => {
-    evolution.isConfigured = jest.fn(() => false);
+    isConfigured.mockReturnValue(false);
     await expect(service.runWeeklyStatusDispatch()).rejects.toBeInstanceOf(
       ServiceUnavailableException,
     );

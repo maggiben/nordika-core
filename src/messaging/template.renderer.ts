@@ -13,10 +13,13 @@ export function renderTemplateText(
   template: string,
   variables: TemplateVariables,
 ): string {
-  return template.replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (_match, key: string) => {
-    const value = variables[key as keyof TemplateVariables];
-    return value ?? '';
-  });
+  return template.replace(
+    /\{\{\s*([a-z_]+)\s*\}\}/gi,
+    (_match, key: string) => {
+      const value = variables[key as keyof TemplateVariables];
+      return value ?? '';
+    },
+  );
 }
 
 export function computeWeekNumber(

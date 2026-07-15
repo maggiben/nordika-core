@@ -19,10 +19,34 @@ describe('SourcesController', () => {
     };
     create.mockResolvedValue(createdSource);
 
-    await expect(controller.upload(jsonFile('{"enabled":true}'))).resolves.toEqual(
-      createdSource,
-    );
+    await expect(
+      controller.upload(jsonFile('{"enabled":true}')),
+    ).resolves.toEqual(createdSource);
     expect(create).toHaveBeenCalledWith('source.json', { enabled: true });
+  });
+
+  it('accepts JSON vendor MIME types and rejects non-JSON files', async () => {
+    create.mockResolvedValue({
+      id: 'source-id',
+      filename: 'source.json',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    await expect(
+      controller.upload({
+        originalname: 'source.json',
+        buffer: Buffer.from('{"ok":true}'),
+        mimetype: 'application/vnd.api+json',
+      }),
+    ).resolves.toMatchObject({ id: 'source-id' });
+
+    await expect(
+      controller.upload({
+        originalname: 'source.txt',
+        buffer: Buffer.from('{}'),
+        mimetype: 'text/plain',
+      }),
+    ).rejects.toThrow(BadRequestException);
   });
 
   it('rejects files with invalid JSON', async () => {

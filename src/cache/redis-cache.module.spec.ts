@@ -16,6 +16,9 @@ describe('RedisCacheModule', () => {
 
     expect(RedisCacheModule.register()).toEqual({
       module: RedisCacheModule,
+      global: true,
+      providers: [expect.any(Function)],
+      exports: [expect.any(Function)],
     });
   });
 

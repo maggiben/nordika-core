@@ -26,13 +26,22 @@ describe('template.renderer', () => {
 
   it('computes 1-based week numbers from ciclo_inicio', () => {
     expect(
-      computeWeekNumber(new Date('2026-07-01T00:00:00Z'), new Date('2026-07-01T12:00:00Z')),
+      computeWeekNumber(
+        new Date('2026-07-01T00:00:00Z'),
+        new Date('2026-07-01T12:00:00Z'),
+      ),
     ).toBe(1);
     expect(
-      computeWeekNumber(new Date('2026-07-01T00:00:00Z'), new Date('2026-07-08T00:00:00Z')),
+      computeWeekNumber(
+        new Date('2026-07-01T00:00:00Z'),
+        new Date('2026-07-08T00:00:00Z'),
+      ),
     ).toBe(2);
     expect(
-      computeWeekNumber(new Date('2026-07-01T00:00:00Z'), new Date('2026-06-30T00:00:00Z')),
+      computeWeekNumber(
+        new Date('2026-07-01T00:00:00Z'),
+        new Date('2026-06-30T00:00:00Z'),
+      ),
     ).toBe(0);
   });
 
@@ -55,5 +64,17 @@ describe('template.renderer', () => {
 
   it('formats YYYY-MM-DD in UTC', () => {
     expect(formatDateOnly(new Date('2026-07-14T23:30:00Z'))).toBe('2026-07-14');
+  });
+
+  it('uses the current date when asOf is omitted', () => {
+    expect(computeWeekNumber(new Date('2000-01-01T00:00:00Z'))).toBeGreaterThan(
+      0,
+    );
+    expect(
+      isDateWithinCiclo(
+        new Date('2000-01-01T00:00:00Z'),
+        new Date('2999-01-01T00:00:00Z'),
+      ),
+    ).toBe(true);
   });
 });

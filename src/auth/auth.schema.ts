@@ -44,13 +44,28 @@ export const EMAIL_ACTION_TOKEN_MODEL = 'EmailActionToken';
 
 export const accountSchema = new Schema<Account>(
   {
-    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+    },
     emailVerifiedAt: Date,
-    identities: [{ provider: { type: String, required: true }, subject: { type: String, required: true } }],
+    identities: [
+      {
+        provider: { type: String, required: true },
+        subject: { type: String, required: true },
+      },
+    ],
     roles: { type: [String], required: true },
     emailNotificationSchedule: {
       enabled: { type: Boolean, default: false },
-      frequency: { type: String, enum: ['weekly', 'monthly'], default: 'weekly' },
+      frequency: {
+        type: String,
+        enum: ['weekly', 'monthly'],
+        default: 'weekly',
+      },
       daysOfWeek: { type: [Number], default: [1] },
       dayOfMonth: { type: Number, default: 1, min: 1, max: 28 },
       sendTime: { type: String, default: '09:00' },
@@ -63,16 +78,49 @@ export const accountSchema = new Schema<Account>(
   { timestamps: true },
 );
 export const localCredentialSchema = new Schema<LocalCredential>(
-  { accountId: { type: Schema.Types.ObjectId, ref: ACCOUNT_MODEL, unique: true, required: true }, salt: { type: String, required: true }, passwordHash: { type: String, required: true } },
+  {
+    accountId: {
+      type: Schema.Types.ObjectId,
+      ref: ACCOUNT_MODEL,
+      unique: true,
+      required: true,
+    },
+    salt: { type: String, required: true },
+    passwordHash: { type: String, required: true },
+  },
   { timestamps: true },
 );
 export const refreshSessionSchema = new Schema<RefreshSession>(
-  { accountId: { type: Schema.Types.ObjectId, ref: ACCOUNT_MODEL, required: true }, tokenHash: { type: String, unique: true, required: true }, expiresAt: { type: Date, required: true }, revokedAt: Date, replacedByHash: String },
+  {
+    accountId: {
+      type: Schema.Types.ObjectId,
+      ref: ACCOUNT_MODEL,
+      required: true,
+    },
+    tokenHash: { type: String, unique: true, required: true },
+    expiresAt: { type: Date, required: true },
+    revokedAt: Date,
+    replacedByHash: String,
+  },
   { timestamps: true },
 );
 refreshSessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 export const emailActionTokenSchema = new Schema<EmailActionToken>(
-  { accountId: { type: Schema.Types.ObjectId, ref: ACCOUNT_MODEL, required: true }, tokenHash: { type: String, unique: true, required: true }, purpose: { type: String, enum: ['verify_email', 'reset_password'], required: true }, expiresAt: { type: Date, required: true }, consumedAt: Date },
+  {
+    accountId: {
+      type: Schema.Types.ObjectId,
+      ref: ACCOUNT_MODEL,
+      required: true,
+    },
+    tokenHash: { type: String, unique: true, required: true },
+    purpose: {
+      type: String,
+      enum: ['verify_email', 'reset_password'],
+      required: true,
+    },
+    expiresAt: { type: Date, required: true },
+    consumedAt: Date,
+  },
   { timestamps: true },
 );
 emailActionTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });

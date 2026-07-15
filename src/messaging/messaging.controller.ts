@@ -8,6 +8,8 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { CacheTTL } from '../cache/http-cache.interceptor';
+import { CACHE_TTLS } from '../cache/cache.constants';
 import { Throttle } from '@nestjs/throttler';
 import { MESSAGE_ADMIN_ROLE } from '../auth/auth.constants';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -37,6 +39,7 @@ export class MessagingController {
   }
 
   @Get('contacts')
+  @CacheTTL(CACHE_TTLS.MESSAGING_LIST_MS)
   listContacts() {
     return this.messaging.listContacts();
   }
@@ -52,6 +55,7 @@ export class MessagingController {
   }
 
   @Get('templates')
+  @CacheTTL(CACHE_TTLS.MESSAGING_LIST_MS)
   listTemplates() {
     return this.messaging.listTemplates();
   }
@@ -67,6 +71,7 @@ export class MessagingController {
   }
 
   @Get('ciclos')
+  @CacheTTL(CACHE_TTLS.MESSAGING_LIST_MS)
   listCiclos() {
     return this.messaging.listCiclos();
   }
@@ -82,11 +87,13 @@ export class MessagingController {
   }
 
   @Get('work-status')
+  @CacheTTL(CACHE_TTLS.MESSAGING_DYNAMIC_MS)
   listWorkStatuses(@Query('cicloId') cicloId?: string) {
     return this.messaging.listWorkStatuses(cicloId);
   }
 
   @Get('dispatches')
+  @CacheTTL(CACHE_TTLS.MESSAGING_DYNAMIC_MS)
   listDispatches(@Query('cicloId') cicloId?: string) {
     return this.messaging.listDispatches(cicloId);
   }

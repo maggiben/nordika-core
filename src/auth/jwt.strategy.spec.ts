@@ -41,8 +41,6 @@ describe('JwtStrategy', () => {
     process.env.JWT_SECRET = 'test-secret';
     const strategy = new JwtStrategy();
 
-    expect(() => strategy.validate({ sub: '' })).toThrow(
-      UnauthorizedException,
-    );
+    expect(() => strategy.validate({ sub: '' })).toThrow(UnauthorizedException);
   });
 });

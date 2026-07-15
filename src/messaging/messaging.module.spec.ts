@@ -1,4 +1,5 @@
 import { MessagingModule } from './messaging.module';
+import { EvolutionClient } from './evolution.client';
 
 describe('MessagingModule', () => {
   const originalMongo = process.env.MONGO_URI;
@@ -24,5 +25,14 @@ describe('MessagingModule', () => {
     const dynamic = MessagingModule.register();
     expect(dynamic.controllers?.length).toBe(1);
     expect(dynamic.providers?.length).toBeGreaterThan(0);
+
+    const clientProvider = dynamic.providers?.find(
+      (provider) =>
+        typeof provider === 'object' &&
+        provider !== null &&
+        'provide' in provider &&
+        provider.provide === EvolutionClient,
+    ) as { useFactory?: () => unknown } | undefined;
+    expect(clientProvider?.useFactory?.()).toBeInstanceOf(EvolutionClient);
   });
 });

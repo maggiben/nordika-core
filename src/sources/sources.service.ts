@@ -4,10 +4,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
-import {
-  SOURCE_OF_TRUTH_MODEL,
-  sourceOfTruthSchema,
-} from './source.schema';
+import { SOURCE_OF_TRUTH_MODEL, sourceOfTruthSchema } from './source.schema';
 import type { SourceOfTruth } from './source.schema';
 import type { Connection, Model } from 'mongoose';
 
@@ -21,13 +18,11 @@ export interface CreatedSource {
 export class SourcesService {
   constructor(
     @Optional()
-    @InjectConnection() private readonly connection: Connection | undefined,
+    @InjectConnection()
+    private readonly connection: Connection | undefined,
   ) {}
 
-  async create(
-    filename: string,
-    content: unknown,
-  ): Promise<CreatedSource> {
+  async create(filename: string, content: unknown): Promise<CreatedSource> {
     const sourceModel = this.getSourceModel();
     const source = await sourceModel.create({ filename, content });
 
@@ -45,8 +40,11 @@ export class SourcesService {
       );
     }
 
+    const existing = this.connection.models[SOURCE_OF_TRUTH_MODEL] as
+      Model<SourceOfTruth> | undefined;
+
     return (
-      this.connection.models[SOURCE_OF_TRUTH_MODEL] ??
+      existing ??
       this.connection.model<SourceOfTruth>(
         SOURCE_OF_TRUTH_MODEL,
         sourceOfTruthSchema,

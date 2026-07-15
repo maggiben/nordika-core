@@ -2,20 +2,34 @@ import { MessagingController } from './messaging.controller';
 import { MessagingService } from './messaging.service';
 
 describe('MessagingController', () => {
+  const createContact = jest.fn();
+  const listContacts = jest.fn();
+  const updateContact = jest.fn();
+  const createTemplate = jest.fn();
+  const listTemplates = jest.fn();
+  const updateTemplate = jest.fn();
+  const createCiclo = jest.fn();
+  const listCiclos = jest.fn();
+  const updateCiclo = jest.fn();
+  const upsertWorkStatus = jest.fn();
+  const listWorkStatuses = jest.fn();
+  const listDispatches = jest.fn();
+  const runWeeklyStatusDispatch = jest.fn();
+
   const messaging = {
-    createContact: jest.fn(),
-    listContacts: jest.fn(),
-    updateContact: jest.fn(),
-    createTemplate: jest.fn(),
-    listTemplates: jest.fn(),
-    updateTemplate: jest.fn(),
-    createCiclo: jest.fn(),
-    listCiclos: jest.fn(),
-    updateCiclo: jest.fn(),
-    upsertWorkStatus: jest.fn(),
-    listWorkStatuses: jest.fn(),
-    listDispatches: jest.fn(),
-    runWeeklyStatusDispatch: jest.fn(),
+    createContact,
+    listContacts,
+    updateContact,
+    createTemplate,
+    listTemplates,
+    updateTemplate,
+    createCiclo,
+    listCiclos,
+    updateCiclo,
+    upsertWorkStatus,
+    listWorkStatuses,
+    listDispatches,
+    runWeeklyStatusDispatch,
   } as unknown as MessagingService;
 
   const controller = new MessagingController(messaging);
@@ -32,8 +46,8 @@ describe('MessagingController', () => {
     await controller.listTemplates();
     await controller.updateTemplate('weekly', { active: true });
 
-    expect(messaging.createContact).toHaveBeenCalled();
-    expect(messaging.updateTemplate).toHaveBeenCalledWith('weekly', {
+    expect(createContact).toHaveBeenCalled();
+    expect(updateTemplate).toHaveBeenCalledWith('weekly', {
       active: true,
     });
   });
@@ -56,7 +70,7 @@ describe('MessagingController', () => {
     await controller.listDispatches('id');
     await controller.runWeeklyDispatch();
 
-    expect(messaging.runWeeklyStatusDispatch).toHaveBeenCalled();
-    expect(messaging.upsertWorkStatus).toHaveBeenCalled();
+    expect(runWeeklyStatusDispatch).toHaveBeenCalled();
+    expect(upsertWorkStatus).toHaveBeenCalled();
   });
 });
