@@ -126,7 +126,7 @@ export interface MessageFlowRow {
     id: string;
     fromNodeId: string;
     toNodeId: string;
-    match: { type: 'equals' | 'contains'; value: string };
+    match: { type: 'equals' | 'contains' | 'any'; value: string };
   }>;
 }
 
@@ -1063,13 +1063,8 @@ export class MessagingService {
       return null;
     }
 
-    const remote =
-      (typeof key?.remoteJid === 'string' && key.remoteJid) ||
-      (typeof data.remoteJid === 'string' && data.remoteJid) ||
-      (typeof data.from === 'string' && data.from) ||
-      '';
-    const phoneDigits = remote.replace(/\D/g, '').replace(/@.*$/, '');
-    if (phoneDigits.length < 8) {
+    const phone = this.phoneFromEvolutionPayload(data, key);
+    if (!phone) {
       return null;
     }
 
@@ -1092,10 +1087,55 @@ export class MessagingService {
       undefined;
 
     return {
-      phone: phoneDigits.slice(0, 20),
+      phone,
       body: conversation || '(respuesta recibida)',
       providerMessageId,
     };
+  }
+
+  /** Prefer real @s.whatsapp.net / @c.us JIDs over privacy @lid identifiers. */
+  private phoneFromEvolutionPayload(
+    data: Record<string, unknown>,
+    key: Record<string, unknown> | undefined,
+  ): string | null {
+    const candidates: unknown[] = [
+      key?.senderPn,
+      key?.remoteJidAlt,
+      key?.participant,
+      data.senderPn,
+      data.sender_pn,
+      data.remoteJidAlt,
+      data.participant,
+      data.sender,
+      key?.remoteJid,
+      data.remoteJid,
+      data.from,
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate !== 'string' || !candidate.trim()) {
+        continue;
+      }
+      const phone = this.phoneFromWhatsAppJid(candidate);
+      if (phone) {
+        return phone;
+      }
+    }
+    return null;
+  }
+
+  private phoneFromWhatsAppJid(jid: string): string | null {
+    const trimmed = jid.trim();
+    const at = trimmed.indexOf('@');
+    const user = (at >= 0 ? trimmed.slice(0, at) : trimmed).replace(/\D/g, '');
+    const server = (at >= 0 ? trimmed.slice(at + 1) : '').toLowerCase();
+    if (server.includes('lid')) {
+      return null;
+    }
+    if (user.length < 8 || user.length > 20) {
+      return null;
+    }
+    return user;
   }
 
   async recordInboundMessage(dto: InboundMessageDto): Promise<{

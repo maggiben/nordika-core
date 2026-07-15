@@ -114,7 +114,7 @@ export interface StaffCatalogMessage {
   active: boolean;
 }
 
-export type FlowMatchType = 'equals' | 'contains';
+export type FlowMatchType = 'equals' | 'contains' | 'any';
 
 export interface MessageFlowNode {
   id: string;
@@ -381,7 +381,7 @@ export const messageFlowSchema: Schema<MessageFlow> = new Schema<MessageFlow>(
             type: {
               type: String,
               required: true,
-              enum: ['equals', 'contains'],
+              enum: ['equals', 'contains', 'any'],
             },
             value: { type: String, required: true },
           },

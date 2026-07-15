@@ -393,11 +393,11 @@ export class FlowNodeDto {
 }
 
 export class FlowEdgeMatchDto {
-  @IsIn(['equals', 'contains'])
-  type!: 'equals' | 'contains';
+  @IsIn(['equals', 'contains', 'any'])
+  type!: 'equals' | 'contains' | 'any';
 
   @IsString()
-  @Length(1, 200)
+  @Length(0, 200)
   value!: string;
 }
 

@@ -55,12 +55,16 @@ export function assertValidFlowGraph(input: {
         `Flow edge ${id} references a missing node.`,
       );
     }
-    if (edge.match?.type !== 'equals' && edge.match?.type !== 'contains') {
+    if (
+      edge.match?.type !== 'equals' &&
+      edge.match?.type !== 'contains' &&
+      edge.match?.type !== 'any'
+    ) {
       throw new BadRequestException(
-        `Flow edge ${id} match.type must be equals or contains.`,
+        `Flow edge ${id} match.type must be equals, contains, or any.`,
       );
     }
-    if (!edge.match.value?.trim()) {
+    if (edge.match.type !== 'any' && !edge.match.value?.trim()) {
       throw new BadRequestException(
         `Flow edge ${id} needs a non-empty match value.`,
       );

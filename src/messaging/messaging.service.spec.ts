@@ -1064,6 +1064,41 @@ describe('MessagingService', () => {
     expect(
       service.extractInboundFromEvolution({
         data: {
+          key: {
+            remoteJid: '13104062693415@lid',
+            remoteJidAlt: '5491199887766@s.whatsapp.net',
+            fromMe: false,
+          },
+          message: { conversation: 'Día completo' },
+        },
+      }),
+    ).toMatchObject({
+      phone: '5491199887766',
+      body: 'Día completo',
+    });
+    expect(
+      service.extractInboundFromEvolution({
+        data: {
+          key: {
+            remoteJid: '13104062693415@lid',
+            senderPn: '5491188776655',
+            fromMe: false,
+          },
+          message: { conversation: 'ok' },
+        },
+      }),
+    ).toMatchObject({ phone: '5491188776655' });
+    expect(
+      service.extractInboundFromEvolution({
+        data: {
+          key: { remoteJid: '13104062693415@lid', fromMe: false },
+          message: { conversation: 'hola' },
+        },
+      }),
+    ).toBeNull();
+    expect(
+      service.extractInboundFromEvolution({
+        data: {
           key: { remoteJid: '5491112345678@s.whatsapp.net', fromMe: false },
           message: { extendedTextMessage: { text: 'extendido' } },
         },
@@ -1226,6 +1261,12 @@ describe('MessagingService', () => {
           fromNodeId: 'a',
           toNodeId: 'b',
           match: { type: 'contains', value: 'si' },
+        },
+        {
+          id: 'e2',
+          fromNodeId: 'a',
+          toNodeId: 'b',
+          match: { type: 'equals', value: 'día completo' },
         },
       ],
     });
