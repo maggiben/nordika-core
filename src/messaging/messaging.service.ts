@@ -181,9 +181,22 @@ export class MessagingService {
 
   async createContact(dto: CreateContactDto): Promise<WhatsAppContactDocument> {
     const phone = this.normalizePhone(dto.phone);
-    const existing = await this.contacts.findOne({ phone }).exec();
+    // Also merge AR WhatsApp variants (54911… vs 5411…) so multi-obra
+    // staffing does not create a second contact that never gets replies.
+    const existing = await this.findContactByPhone(phone);
     if (existing) {
-      // Same phone across obras: merge membership instead of unique-key conflict.
+      if (existing.phone !== phone) {
+        const previousPhone = existing.phone;
+        await this.contacts
+          .findByIdAndUpdate(existing._id, { phone, active: true })
+          .exec();
+        existing.phone = phone;
+        existing.active = true;
+        this.logger.warn(
+          `Normalized contact phone ${previousPhone} → ${phone}`,
+        );
+      }
+      await this.deactivatePhoneVariantDuplicates(existing, phone);
       return this.updateContact(String(existing._id), {
         ...(dto.label !== undefined ? { label: dto.label } : {}),
         ...(dto.language !== undefined ? { language: dto.language } : {}),
@@ -2969,27 +2982,114 @@ export class MessagingService {
     return { next: items[0] ?? null, awaitingReply: false };
   }
 
-  /** Match contacts even when WhatsApp JIDs omit/include country or mobile `9`. */
+  /** True when two E.164-ish phones are the same person (AR 549/541 variants). */
+  private phonesMatch(left: string, right: string): boolean {
+    const a = left.replace(/\D/g, '');
+    const b = right.replace(/\D/g, '');
+    if (!a || !b) {
+      return false;
+    }
+    if (a === b) {
+      return true;
+    }
+    const min = Math.min(a.length, b.length, 10);
+    return min >= 8 && a.slice(-min) === b.slice(-min);
+  }
+
+  private async deactivatePhoneVariantDuplicates(
+    keeper: WhatsAppContactDocument,
+    phone: string,
+  ): Promise<void> {
+    const contacts = await this.contacts.find().exec();
+    for (const contact of contacts) {
+      if (String(contact._id) === String(keeper._id)) {
+        continue;
+      }
+      if (!contact.active || !this.phonesMatch(contact.phone, phone)) {
+        continue;
+      }
+      await this.contacts
+        .findByIdAndUpdate(contact._id, { active: false })
+        .exec();
+      this.logger.warn(
+        `Deactivated duplicate contact ${contact.phone} (${String(contact._id)}); keeper ${keeper.phone}`,
+      );
+    }
+  }
+
+  /**
+   * Match contacts even when WhatsApp JIDs omit/include country or mobile `9`.
+   * When several records collide after multi-obra staffing, prefer the contact
+   * that owns an open catalog outbound / catalog assignment so replies advance.
+   */
   private async findContactByPhone(
     phone: string,
   ): Promise<WhatsAppContactDocument | null> {
-    const exact = await this.contacts.findOne({ phone }).exec();
-    if (exact) {
-      return exact;
+    const needle = phone.replace(/\D/g, '');
+    const contacts = await this.contacts.find().exec();
+    const matches = contacts.filter((contact) =>
+      this.phonesMatch(contact.phone, needle),
+    );
+    if (matches.length === 0) {
+      return null;
+    }
+    if (matches.length === 1) {
+      return matches[0];
     }
 
-    const contacts = await this.contacts.find({ active: true }).exec();
-    const needle = phone.replace(/\D/g, '');
-    return (
-      contacts.find((contact) => {
-        const stored = contact.phone.replace(/\D/g, '');
-        if (stored === needle) {
-          return true;
-        }
-        const min = Math.min(stored.length, needle.length, 10);
-        return min >= 8 && stored.slice(-min) === needle.slice(-min);
-      }) ?? null
+    const assignedIds = new Set(
+      (
+        await this.catalog
+          .find({
+            active: true,
+            assignedContactId: { $exists: true, $ne: null },
+          })
+          .exec()
+      )
+        .map((row) =>
+          row.assignedContactId ? String(row.assignedContactId) : null,
+        )
+        .filter((id): id is string => Boolean(id)),
     );
+
+    let best = matches[0];
+    let bestScore = Number.NEGATIVE_INFINITY;
+    for (const contact of matches) {
+      let score = 0;
+      if (contact.active) {
+        score += 10;
+      }
+      if (contact.phone.replace(/\D/g, '') === needle) {
+        score += 5;
+      }
+      if (assignedIds.has(String(contact._id))) {
+        score += 50;
+      }
+      if (contact.catalogSlotKey) {
+        score += 15;
+      }
+      const openCatalog = await this.messages
+        .findOne({
+          contactId: contact._id,
+          direction: 'outbound',
+          status: 'sent',
+          source: 'catalog',
+          repliedAt: { $exists: false },
+        })
+        .exec();
+      if (openCatalog) {
+        score += 100;
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        best = contact;
+      }
+    }
+
+    this.logger.warn(
+      `Ambiguous phone ${needle}: chose ${best.phone} (${String(best._id)}) among ${matches.length} contacts`,
+    );
+    return best;
   }
 
   private toObjectId(id: string, label: string): Types.ObjectId {

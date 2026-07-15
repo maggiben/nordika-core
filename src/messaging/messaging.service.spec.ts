@@ -2380,6 +2380,100 @@ describe('MessagingService', () => {
     ).toHaveLength(0);
   });
 
+  it('merges createContact into AR phone variants and deactivates duplicates', async () => {
+    const stale = await contacts.create({
+      phone: '541138911793',
+      label: 'Old',
+      active: true,
+      tags: ['staff'],
+      projectIds: ['proj_a'],
+      projectId: 'proj_a',
+    });
+    await contacts.create({
+      phone: '5491138911793',
+      label: 'Dup',
+      active: true,
+      tags: ['staff'],
+      projectIds: ['proj_c'],
+      projectId: 'proj_c',
+    });
+    const merged = await service.createContact({
+      phone: '5491138911793',
+      label: 'Lead',
+      projectId: 'proj_b',
+    });
+    expect(normalizeContactProjectIds(merged)).toEqual(
+      expect.arrayContaining(['proj_b']),
+    );
+    expect(merged.phone).toBe('5491138911793');
+    expect(
+      contacts.store.filter(
+        (row) =>
+          (row.phone === '541138911793' || row.phone === '5491138911793') &&
+          row.active,
+      ),
+    ).toHaveLength(1);
+    void stale;
+  });
+
+  it('routes inbound to the contact with open catalog when AR phone variants collide', async () => {
+    await accounts.create({
+      email: 'variant@example.com',
+      activeProjectId: ACTIVE_PROJECT,
+    });
+    // Stale duplicate without mobile 9 — common after multi-obra staffing.
+    await contacts.create({
+      phone: '541138911794',
+      label: 'Stale',
+      active: true,
+      tags: ['staff'],
+      projectId: 'proj_other',
+      catalogSlotKey: '2026-07-15T19:22|America/Argentina/Buenos_Aires|weekly',
+      catalogSlotStartAt: new Date('2026-07-15T22:22:00.000Z'),
+    });
+    const lead = await contacts.create({
+      phone: '5491138911794',
+      label: 'Benjamin',
+      active: true,
+      tags: ['staff'],
+      projectIds: ['proj_other', ACTIVE_PROJECT],
+      projectId: ACTIVE_PROJECT,
+      catalogSlotKey: '2026-07-15T20:05|America/Argentina/Buenos_Aires|weekly',
+      catalogSlotStartAt: new Date('2026-07-15T23:05:00.000Z'),
+    });
+    const only = await service.createCatalogMessage({
+      title: 'Avance de jornada',
+      body: '¿Cómo va la jornada?',
+      assignedContactId: String(lead._id),
+    });
+    await sources.create({
+      filename: 'obra.json',
+      projectId: ACTIVE_PROJECT,
+      content: {
+        meta: { projectId: ACTIVE_PROJECT, projectNombre: 'Pier' },
+        tareas_con_objetivo: [
+          { id: 'carp', label: 'colocacion carpinterias', avance_base: 40 },
+        ],
+      },
+    });
+    await service.sendCatalogMessage(String(only._id), undefined, {
+      catalogSlotStart: lead.catalogSlotStartAt,
+    });
+    backdateCatalogOutbound(messages.store, only._id);
+    sendInteractive.mockClear();
+
+    await service.recordInboundMessage({
+      phone: '5491138911794',
+      body: 'Bien',
+    });
+    expect(sendInteractive).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        sendInteractive.mock.calls[0] as unknown as [string, { title?: string }]
+      )[1].title,
+    ).toContain('Pier · Tarea 1/1');
+  });
+
   it('forces task kickoff after catalog reply even if catalog sequence still open', async () => {
     await accounts.create({
       email: 'force@example.com',
