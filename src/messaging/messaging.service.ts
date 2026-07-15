@@ -2342,15 +2342,16 @@ export class MessagingService {
     }
 
     const membership = normalizeContactProjectIds(contact);
-    let projectId =
+    let projectId: string | undefined =
       (preferredProjectId && membership.includes(preferredProjectId)
         ? preferredProjectId
         : undefined) ?? membership[0];
     if (!projectId) {
-      projectId = (await this.resolveNewestSourceProjectId()) ?? undefined;
-      if (!projectId) {
+      const newest = await this.resolveNewestSourceProjectId();
+      if (!newest) {
         return;
       }
+      projectId = newest;
       const projectIds = mergeContactProjectIds(membership, projectId);
       contact.projectIds = projectIds;
       contact.projectId = projectIds[0];
