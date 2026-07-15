@@ -868,6 +868,153 @@ describe('MessagingService', () => {
     expect(sendInteractive).toHaveBeenCalledTimes(3);
   });
 
+  it('advances to the next catalog step after a reply even if later steps were already blasted', async () => {
+    const lead = await contacts.create({
+      phone: '5491444444444',
+      label: 'Jefe',
+      active: true,
+      tags: ['staff'],
+    });
+    const first = await service.createCatalogMessage({
+      title: 'Paso1',
+      body: 'Pregunta 1',
+      assignedContactId: String(lead._id),
+    });
+    const second = await service.createCatalogMessage({
+      title: 'Paso2',
+      body: 'Pregunta 2',
+      assignedContactId: String(lead._id),
+    });
+    const third = await service.createCatalogMessage({
+      title: 'Paso3',
+      body: 'Pregunta 3',
+      assignedContactId: String(lead._id),
+    });
+
+    await service.sendCatalogMessage(first._id, {
+      contactId: String(lead._id),
+    });
+    // Simulate an older flood that already dropped later steps.
+    messages.store.push({
+      _id: new Types.ObjectId(),
+      contactId: lead._id,
+      phone: lead.phone,
+      direction: 'outbound',
+      body: second.body,
+      status: 'sent',
+      source: 'catalog',
+      catalogMessageId: new Types.ObjectId(second._id),
+      sentAt: new Date(Date.now() - 60_000),
+      title: '2/3 · Paso2',
+      save: () => Promise.resolve(null as never),
+    });
+    messages.store.push({
+      _id: new Types.ObjectId(),
+      contactId: lead._id,
+      phone: lead.phone,
+      direction: 'outbound',
+      body: third.body,
+      status: 'sent',
+      source: 'catalog',
+      catalogMessageId: new Types.ObjectId(third._id),
+      sentAt: new Date(Date.now() - 30_000),
+      title: '3/3 · Paso3',
+      save: () => Promise.resolve(null as never),
+    });
+
+    const before = sendInteractive.mock.calls.length;
+    await service.recordInboundMessage({
+      phone: lead.phone,
+      body: 'respuesta al primero',
+    });
+    // Reply must attach to earliest open catalog (step 1), then send/remind step 2.
+    expect(sendInteractive.mock.calls.length).toBe(before + 1);
+    const openFirst = messages.store.find(
+      (item) =>
+        String(item.catalogMessageId) === first._id &&
+        item.direction === 'outbound' &&
+        item.repliedAt,
+    );
+    expect(openFirst).toBeTruthy();
+  });
+
+  it('ignores inactive/mismatched catalog opens when matching a reply', async () => {
+    const lead = await contacts.create({
+      phone: '5491555555555',
+      label: 'Lead',
+      active: true,
+      tags: ['staff'],
+    });
+    const other = await contacts.create({
+      phone: '5491666666666',
+      label: 'Otro',
+      active: true,
+      tags: ['staff'],
+    });
+    const only = await service.createCatalogMessage({
+      title: 'Solo',
+      body: 'Una sola',
+      assignedContactId: String(lead._id),
+    });
+    await service.sendCatalogMessage(only._id, {
+      contactId: String(lead._id),
+    });
+    const inactive = await catalog.create({
+      title: 'Inactivo',
+      body: 'x',
+      assignedContactId: lead._id,
+      sortOrder: 9,
+      active: false,
+    });
+    messages.store.push({
+      _id: new Types.ObjectId(),
+      contactId: lead._id,
+      phone: lead.phone,
+      direction: 'outbound',
+      body: 'x',
+      status: 'sent',
+      source: 'catalog',
+      catalogMessageId: inactive._id,
+      sentAt: new Date(Date.now() - 10_000),
+      title: 'Inactivo',
+      save: () => Promise.resolve(null as never),
+    });
+    const mismatched = await catalog.create({
+      title: 'Ajeno',
+      body: 'y',
+      assignedContactId: other._id,
+      sortOrder: 1,
+      active: true,
+    });
+    messages.store.push({
+      _id: new Types.ObjectId(),
+      contactId: lead._id,
+      phone: lead.phone,
+      direction: 'outbound',
+      body: 'y',
+      status: 'sent',
+      source: 'catalog',
+      catalogMessageId: mismatched._id,
+      sentAt: new Date(Date.now() - 5_000),
+      title: 'Ajeno',
+      save: () => Promise.resolve(null as never),
+    });
+
+    const before = sendInteractive.mock.calls.length;
+    await service.recordInboundMessage({
+      phone: lead.phone,
+      body: 'ok solo',
+    });
+    // Single-step sequence: reply closes it and does not advance.
+    expect(sendInteractive.mock.calls.length).toBe(before);
+    expect(
+      messages.store.some(
+        (item) =>
+          String(item.catalogMessageId) === only._id && Boolean(item.repliedAt),
+      ),
+    ).toBe(true);
+  });
+
   it('ignores ciclos outside the date window', async () => {
     await ciclos.create({
       name: 'C1',

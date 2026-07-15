@@ -1091,7 +1091,10 @@ export class MessagingService {
       }
       return sentAt.getTime() >= windowStart;
     });
-    const openThread = openCandidates[0];
+    const openThread = await this.pickOpenOutboundThread(
+      contact._id,
+      openCandidates,
+    );
 
     let responseLatencyMs: number | null = null;
     let responseStatus: StaffResponseTrafficLight | null = null;
@@ -1824,21 +1827,84 @@ export class MessagingService {
     }
   }
 
+  /**
+   * Prefer the lowest catalog sortOrder still awaiting a reply so operators
+   * answer step N before we treat the reply as belonging to a later flood.
+   */
+  private async pickOpenOutboundThread(
+    contactId: Types.ObjectId,
+    openCandidates: StaffMessageDocument[],
+  ): Promise<StaffMessageDocument | undefined> {
+    const catalogOpens: Array<{
+      item: StaffMessageDocument;
+      sortOrder: number;
+      sentAtMs: number;
+    }> = [];
+    for (const item of openCandidates) {
+      if (item.source !== 'catalog' || !item.catalogMessageId) {
+        continue;
+      }
+      const catalog = await this.catalog.findById(item.catalogMessageId).exec();
+      if (!catalog || !catalog.active) {
+        continue;
+      }
+      if (
+        catalog.assignedContactId &&
+        String(catalog.assignedContactId) !== String(contactId)
+      ) {
+        continue;
+      }
+      const sentAtMs =
+        item.sentAt?.getTime() ??
+        (
+          item as StaffMessageDocument & { createdAt?: Date }
+        ).createdAt?.getTime() ??
+        0;
+      catalogOpens.push({
+        item,
+        sortOrder: catalog.sortOrder ?? 0,
+        sentAtMs,
+      });
+    }
+    catalogOpens.sort(
+      (left, right) =>
+        left.sortOrder - right.sortOrder || left.sentAtMs - right.sentAtMs,
+    );
+    return catalogOpens[0]?.item ?? openCandidates[0];
+  }
+
   private async advanceCatalogAfterReply(
     openThread: StaffMessageDocument,
   ): Promise<void> {
     if (!openThread.catalogMessageId || !openThread.contactId) {
       return;
     }
-    // Do not restart the cycle on the last reply; only schedule may start a new lap.
-    const sequence = await this.resolveNextCatalogSend(openThread.contactId, {
-      allowRestart: false,
-    });
-    if (!sequence.next?.assignedContactId || sequence.awaitingReply) {
+    const current = await this.catalog
+      .findById(openThread.catalogMessageId)
+      .exec();
+    if (!current?.assignedContactId || !current.active) {
       return;
     }
-    await this.sendCatalogMessage(String(sequence.next._id), {
-      contactId: String(sequence.next.assignedContactId),
+    const nextOrder = (current.sortOrder ?? 0) + 1;
+    if (nextOrder < 2) {
+      return;
+    }
+    const next = (
+      await this.catalog
+        .find({
+          active: true,
+          assignedContactId: current.assignedContactId,
+        })
+        .exec()
+    ).find((item) => (item.sortOrder ?? 0) === nextOrder);
+    if (!next) {
+      return;
+    }
+
+    // If this next step was already blasted unreplied, just remind that step
+    // (sendCatalogMessage allows same-step reminder). Otherwise send first time.
+    await this.sendCatalogMessage(String(next._id), {
+      contactId: String(current.assignedContactId),
     });
   }
 
