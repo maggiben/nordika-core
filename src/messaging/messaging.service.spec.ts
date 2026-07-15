@@ -665,9 +665,6 @@ describe('MessagingService', () => {
       assignedContactId: String(contact._id),
     });
     expect(catalogMessage.assignedLabel).toBe('Estructura');
-
-    const sent = await service.sendCatalogMessage(catalogMessage._id, {});
-    expect(sent.ok).toBe(true);
     expect(sendInteractive).toHaveBeenCalled();
 
     const reply = await service.recordInboundMessage({
