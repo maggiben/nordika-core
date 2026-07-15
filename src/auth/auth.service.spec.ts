@@ -26,8 +26,14 @@ describe('AuthService', () => {
     process.env.APP_URL = 'https://bff.example.com';
     process.env.RESEND_API_KEY = 're_test';
     process.env.RESEND_FROM = 'Nodika <auth@example.com>';
-    Object.values({ accounts, credentials, sessions, actionTokens, jwt }).forEach(
-      (model) => Object.values(model).forEach((fn) => {
+    Object.values({
+      accounts,
+      credentials,
+      sessions,
+      actionTokens,
+      jwt,
+    }).forEach((model) =>
+      Object.values(model).forEach((fn) => {
         if (typeof fn === 'function') fn.mockReset();
       }),
     );
@@ -48,38 +54,43 @@ describe('AuthService', () => {
     );
   });
 
-  it('registers an unverified local account without source-writer JWT claims', async () => {
-    const result = await service.register(' Person@Example.com ', 'a-password-123');
+  it('registers a local account with source-writer JWT claims without email delivery', async () => {
+    const verifiedAccount = {
+      ...account,
+      emailVerifiedAt: new Date(),
+    };
+    accounts.create.mockResolvedValueOnce(verifiedAccount);
+
+    const result = await service.register(
+      ' Person@Example.com ',
+      'a-password-123',
+    );
 
     expect(accounts.create).toHaveBeenCalledWith(
       expect.objectContaining({
         email: 'person@example.com',
+        emailVerifiedAt: expect.any(Date),
         identities: [{ provider: 'local', subject: 'person@example.com' }],
         roles: ['source_writer'],
       }),
     );
     expect(credentials.create).toHaveBeenCalledWith(
-      expect.objectContaining({ accountId: account._id, salt: expect.any(String) }),
+      expect.objectContaining({
+        accountId: account._id,
+        salt: expect.any(String),
+      }),
     );
-    expect(send).toHaveBeenCalledWith(
-      expect.objectContaining({ to: ['person@example.com'] }),
-    );
+    expect(send).not.toHaveBeenCalled();
     expect(jwt.signAsync).toHaveBeenCalledWith({
       sub: 'account-id',
-      roles: [],
+      roles: ['source_writer'],
     });
     expect(result.account).toEqual(
-      expect.objectContaining({ emailVerified: false, roles: [] }),
+      expect.objectContaining({
+        emailVerified: true,
+        roles: ['source_writer'],
+      }),
     );
-  });
-
-  it('does not make registration unusable when email delivery fails', async () => {
-    send.mockRejectedValueOnce(new Error('delivery failed'));
-
-    await expect(
-      service.register('person@example.com', 'a-password-123'),
-    ).resolves.toEqual(expect.objectContaining({ accessToken: 'access-token' }));
-    expect(actionTokens.deleteOne).toHaveBeenCalledWith({ _id: 'action-id' });
   });
 
   it('rejects duplicate registration', async () => {
@@ -114,38 +125,70 @@ describe('AuthService', () => {
 
   it('rejects unknown, missing-credential, malformed, and wrong-password login attempts', async () => {
     accounts.findOne.mockResolvedValueOnce(null);
-    await expect(service.login('person@example.com', 'a-password-123')).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(
+      service.login('person@example.com', 'a-password-123'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
     accounts.findOne.mockResolvedValueOnce(account);
     credentials.findOne.mockResolvedValueOnce(null);
-    await expect(service.login('person@example.com', 'a-password-123')).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(
+      service.login('person@example.com', 'a-password-123'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
     accounts.findOne.mockResolvedValueOnce(account);
-    credentials.findOne.mockResolvedValueOnce({ salt: 'salt', passwordHash: 'tiny' });
-    await expect(service.login('person@example.com', 'a-password-123')).rejects.toBeInstanceOf(UnauthorizedException);
+    credentials.findOne.mockResolvedValueOnce({
+      salt: 'salt',
+      passwordHash: 'tiny',
+    });
+    await expect(
+      service.login('person@example.com', 'a-password-123'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
   it('rotates refresh sessions and uses current verification status', async () => {
-    sessions.findOne.mockResolvedValueOnce({ _id: 'session-id', accountId: account._id });
-    accounts.findById.mockResolvedValueOnce({ ...account, emailVerifiedAt: new Date() });
+    sessions.findOne.mockResolvedValueOnce({
+      _id: 'session-id',
+      accountId: account._id,
+    });
+    accounts.findById.mockResolvedValueOnce({
+      ...account,
+      emailVerifiedAt: new Date(),
+    });
     sessions.updateOne.mockResolvedValueOnce({ modifiedCount: 1 });
 
     await service.refresh('a'.repeat(32));
     expect(sessions.updateOne).toHaveBeenCalledWith(
       { _id: 'session-id', revokedAt: { $exists: false } },
-      expect.objectContaining({ $set: expect.objectContaining({ replacedByHash: expect.any(String) }) }),
+      expect.objectContaining({
+        $set: expect.objectContaining({ replacedByHash: expect.any(String) }),
+      }),
     );
-    expect(jwt.signAsync).toHaveBeenCalledWith({ sub: 'account-id', roles: ['source_writer'] });
+    expect(jwt.signAsync).toHaveBeenCalledWith({
+      sub: 'account-id',
+      roles: ['source_writer'],
+    });
   });
 
   it('rejects absent accounts and concurrent refresh reuse', async () => {
     sessions.findOne.mockResolvedValueOnce(null);
-    await expect(service.refresh('a'.repeat(32))).rejects.toBeInstanceOf(UnauthorizedException);
-    sessions.findOne.mockResolvedValueOnce({ _id: 'session-id', accountId: account._id });
+    await expect(service.refresh('a'.repeat(32))).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    sessions.findOne.mockResolvedValueOnce({
+      _id: 'session-id',
+      accountId: account._id,
+    });
     accounts.findById.mockResolvedValueOnce(null);
-    await expect(service.refresh('a'.repeat(32))).rejects.toBeInstanceOf(UnauthorizedException);
-    sessions.findOne.mockResolvedValueOnce({ _id: 'session-id', accountId: account._id });
+    await expect(service.refresh('a'.repeat(32))).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    sessions.findOne.mockResolvedValueOnce({
+      _id: 'session-id',
+      accountId: account._id,
+    });
     accounts.findById.mockResolvedValueOnce(account);
     sessions.updateOne.mockResolvedValueOnce({ modifiedCount: 0 });
-    await expect(service.refresh('a'.repeat(32))).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(service.refresh('a'.repeat(32))).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
   });
 
   it('revokes a logout session and only sends resets for known accounts', async () => {
@@ -160,11 +203,17 @@ describe('AuthService', () => {
   });
 
   it('verifies and resets using single-use action tokens', async () => {
-    actionTokens.findOne.mockResolvedValueOnce({ _id: 'verify-id', accountId: account._id });
+    actionTokens.findOne.mockResolvedValueOnce({
+      _id: 'verify-id',
+      accountId: account._id,
+    });
     actionTokens.updateOne.mockResolvedValueOnce({ modifiedCount: 1 });
     await service.verifyEmail('a'.repeat(32));
     expect(accounts.updateOne).toHaveBeenCalled();
-    actionTokens.findOne.mockResolvedValueOnce({ _id: 'reset-id', accountId: account._id });
+    actionTokens.findOne.mockResolvedValueOnce({
+      _id: 'reset-id',
+      accountId: account._id,
+    });
     actionTokens.updateOne.mockResolvedValueOnce({ modifiedCount: 1 });
     await service.resetPassword('a'.repeat(32), 'a-new-password');
     expect(credentials.updateOne).toHaveBeenCalled();
@@ -173,10 +222,17 @@ describe('AuthService', () => {
 
   it('rejects missing and already-consumed action tokens', async () => {
     actionTokens.findOne.mockResolvedValueOnce(null);
-    await expect(service.verifyEmail('a'.repeat(32))).rejects.toBeInstanceOf(UnauthorizedException);
-    actionTokens.findOne.mockResolvedValueOnce({ _id: 'verify-id', accountId: account._id });
+    await expect(service.verifyEmail('a'.repeat(32))).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    actionTokens.findOne.mockResolvedValueOnce({
+      _id: 'verify-id',
+      accountId: account._id,
+    });
     actionTokens.updateOne.mockResolvedValueOnce({ modifiedCount: 0 });
-    await expect(service.verifyEmail('a'.repeat(32))).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(service.verifyEmail('a'.repeat(32))).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
   });
 });
 

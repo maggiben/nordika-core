@@ -61,6 +61,7 @@ export class AuthService {
     }
     const account = await this.accounts.create({
       email: normalizedEmail,
+      emailVerifiedAt: new Date(),
       identities: [{ provider: 'local', subject: normalizedEmail }],
       roles: [SOURCE_WRITER_ROLE],
     });
@@ -70,7 +71,6 @@ export class AuthService {
       salt,
       passwordHash: (await scrypt(password, salt)).toString('base64url'),
     });
-    await this.sendAction(account._id, normalizedEmail, 'verify_email');
     return this.issue(account);
   }
 
@@ -168,7 +168,7 @@ export class AuthService {
       tokenHash: digest(token),
       expiresAt: new Date(Date.now() + this.config.refreshTtlMs),
     });
-    const roles = account.emailVerifiedAt ? account.roles : [];
+    const roles = account.roles;
     return {
       accessToken: await this.jwt.signAsync({
         sub: account._id.toString(),
