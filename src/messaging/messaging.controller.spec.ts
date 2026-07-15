@@ -22,14 +22,6 @@ describe('MessagingController', () => {
   const sendCatalogMessage = jest.fn();
   const deleteCatalogMessage = jest.fn();
   const reorderCatalogMessages = jest.fn();
-  const listFlows = jest.fn();
-  const createFlow = jest.fn();
-  const listFlowRuns = jest.fn();
-  const getFlowRun = jest.fn();
-  const getFlow = jest.fn();
-  const updateFlow = jest.fn();
-  const deleteFlow = jest.fn();
-  const startFlow = jest.fn();
   const sendTestMessage = jest.fn();
   const remindContact = jest.fn();
   const runWeeklyStatusDispatch = jest.fn();
@@ -55,14 +47,6 @@ describe('MessagingController', () => {
     sendCatalogMessage,
     deleteCatalogMessage,
     reorderCatalogMessages,
-    listFlows,
-    createFlow,
-    listFlowRuns,
-    getFlowRun,
-    getFlow,
-    updateFlow,
-    deleteFlow,
-    startFlow,
     sendTestMessage,
     remindContact,
     runWeeklyStatusDispatch,
@@ -118,38 +102,6 @@ describe('MessagingController', () => {
       orderedIds: ['id'],
     });
     await controller.deleteCatalogMessage('id');
-    await controller.listFlows();
-    await controller.createFlow({
-      name: 'Flow',
-      startNodeId: 'a',
-      nodes: [
-        {
-          id: 'a',
-          title: 'A',
-          body: 'A',
-          position: { x: 0, y: 0 },
-        },
-      ],
-      edges: [],
-    });
-    await controller.listFlowRuns('c1');
-    await controller.getFlowRun('run1');
-    await controller.getFlow('flow1');
-    await controller.updateFlow('flow1', {
-      name: 'Flow 2',
-      startNodeId: 'a',
-      nodes: [
-        {
-          id: 'a',
-          title: 'A',
-          body: 'A',
-          position: { x: 0, y: 0 },
-        },
-      ],
-      edges: [],
-    });
-    await controller.deleteFlow('flow1');
-    await controller.startFlow('flow1', { contactId: 'c1' });
     await controller.testSend({
       phone: '5491112345678',
       templateKey: 'weekly_status',
@@ -167,8 +119,6 @@ describe('MessagingController', () => {
       orderedIds: ['id'],
     });
     expect(deleteCatalogMessage).toHaveBeenCalledWith('id');
-    expect(listFlows).toHaveBeenCalled();
-    expect(startFlow).toHaveBeenCalledWith('flow1', { contactId: 'c1' });
     expect(sendTestMessage).toHaveBeenCalled();
     expect(remindContact).toHaveBeenCalledWith('id');
   });
