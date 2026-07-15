@@ -20,14 +20,11 @@ export class User {
 
 export const UserSchema = SchemaFactory.createForClass(User);
 
-UserSchema.pre('save', async function (next) {
-  const user = this as UserDocument;
-
-  if (!user.isModified('password')) {
-    return next();
+UserSchema.pre('save', async function () {
+  if (!this.isModified('password')) {
+    return;
   }
 
   const salt = await bcrypt.genSalt(SALT_ROUNDS);
-  user.password = await bcrypt.hash(user.password, salt);
-  next();
+  this.password = await bcrypt.hash(this.password, salt);
 });
