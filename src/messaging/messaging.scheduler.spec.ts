@@ -12,6 +12,8 @@ describe('MessagingScheduler', () => {
           whatsappSummaries: [
             { cicloId: '1', weekNumber: 1, sent: 1, failed: 0, skipped: 0 },
           ],
+          catalogSent: 1,
+          catalogFailed: 0,
         }),
       ),
     };
@@ -45,12 +47,16 @@ describe('MessagingScheduler', () => {
             emailFailures: number;
             whatsappTriggered: boolean;
             whatsappSummaries: [];
+            catalogSent: number;
+            catalogFailed: number;
           }>((resolve) => {
             resolveRun = () =>
               resolve({
                 dueAccounts: 0,
                 emailsSent: 0,
                 emailFailures: 0,
+                catalogSent: 0,
+                catalogFailed: 0,
                 whatsappTriggered: false,
                 whatsappSummaries: [],
               });

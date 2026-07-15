@@ -1025,13 +1025,17 @@ export class MessagingService {
   }
 
   /**
-   * Minute job entry: claim due account schedule slots, email digests, then
-   * run WhatsApp weekly status once when at least one slot was claimed.
+   * Minute job entry: claim due account schedule slots, then:
+   * 1) email digest to the account
+   * 2) WhatsApp re-send of every active assigned catalog message (“Mensajes del equipo”)
+   * 3) WhatsApp weekly ciclo status (if configured)
    */
   async runScheduledNotifications(asOf: Date = new Date()): Promise<{
     dueAccounts: number;
     emailsSent: number;
     emailFailures: number;
+    catalogSent: number;
+    catalogFailed: number;
     whatsappTriggered: boolean;
     whatsappSummaries: WeeklyDispatchSummary[];
   }> {
@@ -1083,15 +1087,22 @@ export class MessagingService {
       }
     }
 
+    let catalogSent = 0;
+    let catalogFailed = 0;
     let whatsappTriggered = false;
     let whatsappSummaries: WeeklyDispatchSummary[] = [];
+
     if (claimed > 0 && this.evolution.isConfigured()) {
+      const catalogResult = await this.sendAssignedCatalogMessages();
+      catalogSent = catalogResult.sent;
+      catalogFailed = catalogResult.failed;
+
       try {
         whatsappSummaries = await this.runWeeklyStatusDispatch(asOf);
         whatsappTriggered = true;
       } catch (error) {
         this.logger.warn(
-          `WhatsApp scheduled dispatch skipped: ${
+          `WhatsApp ciclo dispatch skipped: ${
             error instanceof Error ? error.message : 'unknown error'
           }`,
         );
@@ -1102,9 +1113,55 @@ export class MessagingService {
       dueAccounts: claimed,
       emailsSent,
       emailFailures,
+      catalogSent,
+      catalogFailed,
       whatsappTriggered,
       whatsappSummaries,
     };
+  }
+
+  /** Re-send every active catalog message that has an assigned staff contact. */
+  async sendAssignedCatalogMessages(): Promise<{
+    sent: number;
+    failed: number;
+    skipped: number;
+  }> {
+    if (!this.evolution.isConfigured()) {
+      return { sent: 0, failed: 0, skipped: 0 };
+    }
+
+    const items = await this.catalog
+      .find({
+        active: true,
+        assignedContactId: { $exists: true, $ne: null },
+      })
+      .exec();
+
+    let sent = 0;
+    let failed = 0;
+    let skipped = 0;
+
+    for (const item of items) {
+      if (!item.assignedContactId) {
+        skipped += 1;
+        continue;
+      }
+      try {
+        await this.sendCatalogMessage(String(item._id), {
+          contactId: String(item.assignedContactId),
+        });
+        sent += 1;
+      } catch (error) {
+        failed += 1;
+        this.logger.warn(
+          `Scheduled catalog send failed for ${String(item._id)}: ${
+            error instanceof Error ? error.message : 'unknown error'
+          }`,
+        );
+      }
+    }
+
+    return { sent, failed, skipped };
   }
 
   async runWeeklyStatusDispatch(

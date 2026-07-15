@@ -665,7 +665,7 @@ describe('MessagingService', () => {
     expect(invalidatePaths).toHaveBeenCalled();
   });
 
-  it('claims due account slots, emails digests, and triggers WhatsApp', async () => {
+  it('claims due account slots, emails digests, and sends catalog WhatsApp', async () => {
     // Wednesday 15 Jul 2026 09:00 America/Argentina/Buenos_Aires
     const asOf = new Date('2026-07-15T12:00:00.000Z');
     await accounts.create({
@@ -679,17 +679,25 @@ describe('MessagingService', () => {
         timezone: 'America/Argentina/Buenos_Aires',
       },
     });
-    await contacts.create({
+    const contact = await contacts.create({
       phone: '5491111111111',
       label: 'Estructura',
       active: true,
       tags: ['staff'],
     });
+    await catalog.create({
+      title: 'Avance',
+      body: '¿Cómo va?',
+      assignedContactId: contact._id,
+      active: true,
+    });
 
     const first = await service.runScheduledNotifications(asOf);
     expect(first.emailsSent).toBe(1);
+    expect(first.catalogSent).toBe(1);
     expect(first.whatsappTriggered).toBe(true);
     expect(sendEmail).toHaveBeenCalled();
+    expect(sendInteractive).toHaveBeenCalled();
     const payload = sendEmail.mock.calls[0]?.[0] as {
       to: string[];
       subject: string;
@@ -700,6 +708,7 @@ describe('MessagingService', () => {
     const second = await service.runScheduledNotifications(asOf);
     expect(second.emailsSent).toBe(0);
     expect(second.dueAccounts).toBe(0);
+    expect(second.catalogSent).toBe(0);
   });
 
   it('records email failures and skips WhatsApp when Evolution is off', async () => {
@@ -721,6 +730,7 @@ describe('MessagingService', () => {
     const result = await service.runScheduledNotifications(asOf);
     expect(result.emailFailures).toBe(1);
     expect(result.emailsSent).toBe(0);
+    expect(result.catalogSent).toBe(0);
     expect(result.whatsappTriggered).toBe(false);
   });
 
@@ -773,6 +783,33 @@ describe('MessagingService', () => {
     expect(payload.subject).toContain('mensual');
     expect(payload.text).toContain('Sin contactos');
     delete process.env.RESEND_TO;
+  });
+
+  it('sendAssignedCatalogMessages reports failures and no-ops without Evolution', async () => {
+    isConfigured.mockReturnValue(false);
+    expect(await service.sendAssignedCatalogMessages()).toEqual({
+      sent: 0,
+      failed: 0,
+      skipped: 0,
+    });
+
+    isConfigured.mockReturnValue(true);
+    const contact = await contacts.create({
+      phone: '5491222222222',
+      label: 'Obra',
+      active: true,
+      tags: ['staff'],
+    });
+    await catalog.create({
+      title: 'Avance',
+      body: 'Hola',
+      assignedContactId: contact._id,
+      active: true,
+    });
+    sendInteractive.mockRejectedValueOnce(new Error('boom'));
+    const result = await service.sendAssignedCatalogMessages();
+    expect(result.failed).toBe(1);
+    expect(result.sent).toBe(0);
   });
 
   it('ignores ciclos outside the date window', async () => {
