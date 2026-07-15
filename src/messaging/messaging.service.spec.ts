@@ -2493,6 +2493,47 @@ describe('MessagingService', () => {
     expect(sendInteractive).not.toHaveBeenCalled();
   });
 
+  it('falls back to latest source project and stamps legacy contacts', async () => {
+    const asOf = new Date('2026-07-15T12:00:00.000Z');
+    await accounts.create({
+      email: 'ops@example.com',
+      emailNotificationSchedule: {
+        enabled: true,
+        frequency: 'weekly',
+        daysOfWeek: [3],
+        dayOfMonth: 1,
+        sendTime: '09:00',
+        timezone: 'America/Argentina/Buenos_Aires',
+      },
+    });
+    const legacy = await contacts.create({
+      phone: '5491111111188',
+      label: 'Legacy',
+      active: true,
+      tags: ['staff'],
+    });
+    await catalog.create({
+      title: 'Avance',
+      body: '¿Cómo va?',
+      assignedContactId: legacy._id,
+      active: true,
+    });
+    await sources.create({
+      filename: 'obra.json',
+      projectId: ACTIVE_PROJECT,
+      content: { meta: { projectId: ACTIVE_PROJECT } },
+    });
+
+    const result = await service.runScheduledNotifications(asOf);
+    expect(result.emailsSent).toBe(1);
+    expect(result.catalogSent).toBe(1);
+    expect(sendInteractive).toHaveBeenCalledTimes(1);
+    expect(
+      contacts.store.find((row) => String(row._id) === String(legacy._id))
+        ?.projectId,
+    ).toBe(ACTIVE_PROJECT);
+  });
+
   it('records failed outbound StaffMessage when Evolution send fails', async () => {
     const lead = await contacts.create({
       phone: '5491138911798',

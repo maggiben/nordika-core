@@ -1382,7 +1382,9 @@ export class MessagingService {
     let catalogFailed = 0;
     let whatsappTriggered = false;
     let whatsappSummaries: WeeklyDispatchSummary[] = [];
-    const projectIds = [...activeProjectIds];
+    const projectIds = await this.resolveDispatchProjectIds([
+      ...activeProjectIds,
+    ]);
 
     if (claimed > 0 && this.evolution.isConfigured()) {
       if (catalogSlotKey && catalogSlotStart) {
@@ -1433,7 +1435,10 @@ export class MessagingService {
   async sendAssignedCatalogMessages(
     options: {
       slotStart?: Date;
-      /** When set, only contacts belonging to these obras are messaged. */
+      /**
+       * When set to an array, only contacts for those obras are messaged.
+       * Pass `undefined` for legacy unscoped dispatch (pre-isolation migration).
+       */
       projectIds?: string[];
     } = {},
   ): Promise<{
@@ -1487,12 +1492,9 @@ export class MessagingService {
         skipped += group.length;
         continue;
       }
-      if (projectFilter) {
-        const contactProject = contact.projectId?.trim();
-        if (!contactProject || !projectFilter.has(contactProject)) {
-          skipped += group.length;
-          continue;
-        }
+      if (!(await this.ensureContactInActiveProjects(contact, projectFilter))) {
+        skipped += group.length;
+        continue;
       }
       const sequence = await this.resolveNextCatalogSend(
         this.toObjectId(contactId, 'contact'),
@@ -2198,12 +2200,15 @@ export class MessagingService {
 
   private async kickoffTaskChecklists(
     slotKey: string,
-    projectIds: string[] = [],
+    projectIds?: string[],
   ): Promise<void> {
-    const allowedProjects = new Set(
-      projectIds.map((id) => id.trim()).filter((id) => id.length > 0),
-    );
-    if (allowedProjects.size === 0) {
+    const allowedProjects =
+      projectIds === undefined
+        ? null
+        : new Set(
+            projectIds.map((id) => id.trim()).filter((id) => id.length > 0),
+          );
+    if (allowedProjects && allowedProjects.size === 0) {
       return;
     }
     const assigned = await this.catalog
@@ -2228,8 +2233,9 @@ export class MessagingService {
       if (!contact?.active) {
         continue;
       }
-      const contactProject = contact.projectId?.trim();
-      if (!contactProject || !allowedProjects.has(contactProject)) {
+      if (
+        !(await this.ensureContactInActiveProjects(contact, allowedProjects))
+      ) {
         continue;
       }
       if (contact.catalogSlotKey && contact.catalogSlotKey !== slotKey) {
@@ -2264,9 +2270,14 @@ export class MessagingService {
       return;
     }
 
-    const projectId = contact.projectId?.trim();
+    let projectId = contact.projectId?.trim();
     if (!projectId) {
-      return;
+      projectId = (await this.resolveNewestSourceProjectId()) ?? undefined;
+      if (!projectId) {
+        return;
+      }
+      contact.projectId = projectId;
+      await this.contacts.findByIdAndUpdate(contact._id, { projectId }).exec();
     }
 
     const openAsk = await this.messages
@@ -2393,6 +2404,81 @@ export class MessagingService {
   }
 
   /**
+   * Prefer account.activeProjectId. If unset (pre-selector accounts), fall back
+   * to the newest SourceOfTruth projectId. `undefined` means legacy unscoped
+   * dispatch when neither is available.
+   */
+  private async resolveDispatchProjectIds(
+    fromAccounts: string[],
+  ): Promise<string[] | undefined> {
+    const trimmed = fromAccounts
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0);
+    if (trimmed.length > 0) {
+      return [...new Set(trimmed)];
+    }
+    const fallback = await this.resolveNewestSourceProjectId();
+    if (fallback) {
+      this.logger.warn(
+        `No activeProjectId on claimed accounts; using latest source project ${fallback}`,
+      );
+      return [fallback];
+    }
+    this.logger.warn(
+      'No activeProjectId and no sourced projectId; catalog uses legacy unscoped dispatch',
+    );
+    return undefined;
+  }
+
+  private async resolveNewestSourceProjectId(): Promise<string | null> {
+    const rows = await this.sources
+      .find({ projectId: { $exists: true, $ne: null } })
+      .exec();
+    if (!rows.length) {
+      return null;
+    }
+    const latest = [...rows].sort((left, right) => {
+      const leftAt =
+        (left as { createdAt?: Date }).createdAt?.getTime() ??
+        left._id.getTimestamp().getTime();
+      const rightAt =
+        (right as { createdAt?: Date }).createdAt?.getTime() ??
+        right._id.getTimestamp().getTime();
+      return rightAt - leftAt;
+    })[0];
+    return latest?.projectId?.trim() || null;
+  }
+
+  /**
+   * Legacy contacts without projectId stay eligible while a single active
+   * obra is in scope (auto-stamped). Explicit mismatches stay excluded.
+   */
+  private async ensureContactInActiveProjects(
+    contact: WhatsAppContactDocument,
+    allowed: Set<string> | null,
+  ): Promise<boolean> {
+    if (!allowed) {
+      return true;
+    }
+    const contactProject = contact.projectId?.trim();
+    if (contactProject) {
+      return allowed.has(contactProject);
+    }
+    if (allowed.size !== 1) {
+      return false;
+    }
+    const onlyProject = [...allowed][0];
+    contact.projectId = onlyProject;
+    await this.contacts
+      .findByIdAndUpdate(contact._id, { projectId: onlyProject })
+      .exec();
+    this.logger.log(
+      `Stamped projectId ${onlyProject} on legacy contact ${contact.phone}`,
+    );
+    return true;
+  }
+
+  /**
    * Newest SourceOfTruth for a Nodika obra. Never mixes projects.
    */
   private async resolveSourceForProject(
@@ -2446,12 +2532,15 @@ export class MessagingService {
   private async syncCatalogDispatchSlot(
     slotKey: string,
     slotStart: Date,
-    projectIds: string[] = [],
+    projectIds?: string[],
   ): Promise<void> {
-    const allowedProjects = new Set(
-      projectIds.map((id) => id.trim()).filter((id) => id.length > 0),
-    );
-    if (allowedProjects.size === 0) {
+    const allowedProjects =
+      projectIds === undefined
+        ? null
+        : new Set(
+            projectIds.map((id) => id.trim()).filter((id) => id.length > 0),
+          );
+    if (allowedProjects && allowedProjects.size === 0) {
       return;
     }
     const assigned = await this.catalog
@@ -2473,8 +2562,9 @@ export class MessagingService {
       if (!contact) {
         continue;
       }
-      const contactProject = contact.projectId?.trim();
-      if (!contactProject || !allowedProjects.has(contactProject)) {
+      if (
+        !(await this.ensureContactInActiveProjects(contact, allowedProjects))
+      ) {
         continue;
       }
       if (contact.catalogSlotKey === slotKey) {
