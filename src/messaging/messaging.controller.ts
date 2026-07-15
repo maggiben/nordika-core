@@ -12,9 +12,8 @@ import {
 import { CacheTTL } from '../cache/http-cache.interceptor';
 import { CACHE_TTLS } from '../cache/cache.constants';
 import { Throttle } from '@nestjs/throttler';
-import { MESSAGE_ADMIN_ROLE, SOURCE_WRITER_ROLE } from '../auth/auth.constants';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { Roles } from '../auth/roles.decorator';
+import { MessageAdminOnly, MessagingAccess } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import {
   AssignCatalogMessageDto,
@@ -31,11 +30,15 @@ import {
   UpdateTemplateDto,
   UpsertWorkStatusDto,
 } from './messaging.dto';
-import { MessagingService } from './messaging.service';
+import {
+  MessagingService,
+  type StaffCatalogRow,
+  type WeeklyDispatchSummary,
+} from './messaging.service';
 
 @Controller('messaging')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(MESSAGE_ADMIN_ROLE, SOURCE_WRITER_ROLE)
+@MessagingAccess
 @Throttle({ default: { limit: 30, ttl: 60_000 } })
 export class MessagingController {
   constructor(private readonly messaging: MessagingService) {}
@@ -73,7 +76,7 @@ export class MessagingController {
   }
 
   @Post('ciclos')
-  @Roles(MESSAGE_ADMIN_ROLE)
+  @MessageAdminOnly
   createCiclo(@Body() dto: CreateCicloDto) {
     return this.messaging.createCiclo(dto);
   }
@@ -85,7 +88,7 @@ export class MessagingController {
   }
 
   @Patch('ciclos/:id')
-  @Roles(MESSAGE_ADMIN_ROLE)
+  @MessageAdminOnly
   updateCiclo(@Param('id') id: string, @Body() dto: UpdateCicloDto) {
     return this.messaging.updateCiclo(id, dto);
   }
@@ -113,12 +116,14 @@ export class MessagingController {
   }
 
   @Post('catalog')
-  createCatalogMessage(@Body() dto: CreateCatalogMessageDto) {
+  createCatalogMessage(
+    @Body() dto: CreateCatalogMessageDto,
+  ): Promise<StaffCatalogRow> {
     return this.messaging.createCatalogMessage(dto);
   }
 
   @Get('catalog')
-  listCatalogMessages() {
+  listCatalogMessages(): Promise<StaffCatalogRow[]> {
     return this.messaging.listCatalogMessages();
   }
 
@@ -126,7 +131,7 @@ export class MessagingController {
   updateCatalogMessage(
     @Param('id') id: string,
     @Body() dto: UpdateCatalogMessageDto,
-  ) {
+  ): Promise<StaffCatalogRow> {
     return this.messaging.updateCatalogMessage(id, dto);
   }
 
@@ -134,7 +139,7 @@ export class MessagingController {
   assignCatalogMessage(
     @Param('id') id: string,
     @Body() dto: AssignCatalogMessageDto,
-  ) {
+  ): Promise<StaffCatalogRow> {
     return this.messaging.assignCatalogMessage(id, dto.contactId);
   }
 
@@ -142,28 +147,46 @@ export class MessagingController {
   sendCatalogMessage(
     @Param('id') id: string,
     @Body() dto: SendCatalogMessageDto,
-  ) {
+  ): Promise<{
+    ok: true;
+    phone: string;
+    catalogMessageId: string;
+    threadId: string;
+    providerMessageId?: string;
+  }> {
     return this.messaging.sendCatalogMessage(id, dto);
   }
 
   @Delete('catalog/:id')
-  deleteCatalogMessage(@Param('id') id: string) {
+  deleteCatalogMessage(@Param('id') id: string): Promise<{ ok: true }> {
     return this.messaging.deleteCatalogMessage(id);
   }
 
   @Post('test-send')
-  testSend(@Body() dto: TestSendDto) {
+  testSend(@Body() dto: TestSendDto): Promise<{
+    ok: true;
+    phone: string;
+    templateKey: string;
+    renderedText: string;
+    providerMessageId?: string;
+  }> {
     return this.messaging.sendTestMessage(dto);
   }
 
   @Post('remind')
-  remind(@Body() dto: RemindDto) {
+  remind(@Body() dto: RemindDto): Promise<{
+    ok: true;
+    phone: string;
+    templateKey: string | null;
+    renderedText: string;
+    providerMessageId?: string;
+  }> {
     return this.messaging.remindContact(dto.contactId);
   }
 
   @Post('dispatch/run')
-  @Roles(MESSAGE_ADMIN_ROLE)
-  runWeeklyDispatch() {
+  @MessageAdminOnly
+  runWeeklyDispatch(): Promise<WeeklyDispatchSummary[]> {
     return this.messaging.runWeeklyStatusDispatch();
   }
 }

@@ -1,4 +1,14 @@
-const sendEmail = jest.fn(() => Promise.resolve({ id: 'email-1' }));
+const sendEmail = jest.fn(
+  (_payload?: {
+    from: string;
+    to: string[];
+    subject: string;
+    text: string;
+  }): Promise<{ id: string }> => {
+    void _payload;
+    return Promise.resolve({ id: 'email-1' });
+  },
+);
 
 jest.mock('resend', () => ({
   Resend: jest.fn().mockImplementation(() => ({
@@ -175,6 +185,7 @@ describe('MessagingService', () => {
     label?: string;
     active: boolean;
     tags: string[];
+    language?: string;
   }>();
   const templates = createModelMock<{
     key: string;
@@ -233,6 +244,7 @@ describe('MessagingService', () => {
     catalogMessageId?: Types.ObjectId;
     threadId?: Types.ObjectId;
     title?: string;
+    source?: string;
   }>();
   const catalog = createModelMock<{
     title: string;
@@ -698,12 +710,9 @@ describe('MessagingService', () => {
     expect(first.whatsappTriggered).toBe(true);
     expect(sendEmail).toHaveBeenCalled();
     expect(sendInteractive).toHaveBeenCalled();
-    const payload = sendEmail.mock.calls[0]?.[0] as {
-      to: string[];
-      subject: string;
-    };
-    expect(payload.to).toEqual(['ops@example.com']);
-    expect(payload.subject).toContain('semanal');
+    const payload = sendEmail.mock.calls[0]?.[0];
+    expect(payload?.to).toEqual(['ops@example.com']);
+    expect(payload?.subject).toContain('semanal');
 
     const second = await service.runScheduledNotifications(asOf);
     expect(second.emailsSent).toBe(0);
@@ -774,14 +783,10 @@ describe('MessagingService', () => {
     const result = await service.runScheduledNotifications(asOf);
     expect(result.emailsSent).toBe(1);
     expect(result.whatsappTriggered).toBe(false);
-    const payload = sendEmail.mock.calls[0]?.[0] as {
-      to: string[];
-      subject: string;
-      text: string;
-    };
-    expect(payload.to).toEqual(['ops@example.com', 'copy@example.com']);
-    expect(payload.subject).toContain('mensual');
-    expect(payload.text).toContain('Sin contactos');
+    const payload = sendEmail.mock.calls[0]?.[0];
+    expect(payload?.to).toEqual(['ops@example.com', 'copy@example.com']);
+    expect(payload?.subject).toContain('mensual');
+    expect(payload?.text).toContain('Sin contactos');
     delete process.env.RESEND_TO;
   });
 

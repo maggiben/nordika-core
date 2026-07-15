@@ -12,7 +12,7 @@ import {
   isScheduleDueAt,
   normalizeSchedule,
   notificationSlotKey,
-} from '../account/account.service';
+} from '../account/schedule';
 import { ACCOUNT_MODEL, AccountDocument } from '../auth/auth.schema';
 import { MESSAGING_CACHE_PATHS } from '../cache/cache.constants';
 import { OptionalCacheService } from '../cache/optional-cache.service';

@@ -194,84 +194,86 @@ export const workStatusSchema = new Schema<WorkStatus>(
 );
 workStatusSchema.index({ cicloId: 1, weekNumber: 1 }, { unique: true });
 
-export const messageDispatchSchema = new Schema<MessageDispatch>(
-  {
-    cicloId: {
-      type: Schema.Types.ObjectId,
-      ref: CICLO_MODEL,
-      required: true,
+export const messageDispatchSchema: Schema<MessageDispatch> =
+  new Schema<MessageDispatch>(
+    {
+      cicloId: {
+        type: Schema.Types.ObjectId,
+        ref: CICLO_MODEL,
+        required: true,
+      },
+      contactId: {
+        type: Schema.Types.ObjectId,
+        ref: WHATSAPP_CONTACT_MODEL,
+        required: true,
+      },
+      phone: { type: String, required: true },
+      templateKey: { type: String, required: true },
+      weekNumber: { type: Number, required: true },
+      status: {
+        type: String,
+        required: true,
+        enum: ['sent', 'failed', 'skipped'],
+      },
+      renderedText: { type: String, required: true },
+      error: String,
+      sentAt: Date,
     },
-    contactId: {
-      type: Schema.Types.ObjectId,
-      ref: WHATSAPP_CONTACT_MODEL,
-      required: true,
-    },
-    phone: { type: String, required: true },
-    templateKey: { type: String, required: true },
-    weekNumber: { type: Number, required: true },
-    status: {
-      type: String,
-      required: true,
-      enum: ['sent', 'failed', 'skipped'],
-    },
-    renderedText: { type: String, required: true },
-    error: String,
-    sentAt: Date,
-  },
-  { timestamps: true },
-);
+    { timestamps: true },
+  );
 messageDispatchSchema.index({ cicloId: 1, weekNumber: 1, phone: 1 });
 
-export const staffMessageSchema = new Schema<StaffMessage>(
-  {
-    contactId: {
-      type: Schema.Types.ObjectId,
-      ref: WHATSAPP_CONTACT_MODEL,
-      required: true,
-      index: true,
+export const staffMessageSchema: Schema<StaffMessage> =
+  new Schema<StaffMessage>(
+    {
+      contactId: {
+        type: Schema.Types.ObjectId,
+        ref: WHATSAPP_CONTACT_MODEL,
+        required: true,
+        index: true,
+      },
+      phone: { type: String, required: true, index: true },
+      direction: {
+        type: String,
+        required: true,
+        enum: ['outbound', 'inbound'],
+      },
+      title: { type: String, trim: true },
+      templateKey: { type: String, trim: true },
+      catalogMessageId: {
+        type: Schema.Types.ObjectId,
+        ref: STAFF_CATALOG_MESSAGE_MODEL,
+        index: true,
+      },
+      threadId: {
+        type: Schema.Types.ObjectId,
+        ref: STAFF_MESSAGE_MODEL,
+        index: true,
+      },
+      body: { type: String, required: true },
+      replyBody: { type: String },
+      status: {
+        type: String,
+        required: true,
+        enum: ['sent', 'failed', 'received'],
+      },
+      providerMessageId: String,
+      error: String,
+      source: {
+        type: String,
+        enum: ['test', 'remind', 'dispatch', 'catalog', 'webhook'],
+      },
+      sentAt: Date,
+      receivedAt: Date,
+      repliedAt: Date,
+      responseLatencyMs: { type: Number, min: 0 },
+      responseStatus: {
+        type: String,
+        enum: ['green', 'yellow', 'red', 'pending', 'neutral'],
+      },
     },
-    phone: { type: String, required: true, index: true },
-    direction: {
-      type: String,
-      required: true,
-      enum: ['outbound', 'inbound'],
-    },
-    title: { type: String, trim: true },
-    templateKey: { type: String, trim: true },
-    catalogMessageId: {
-      type: Schema.Types.ObjectId,
-      ref: STAFF_CATALOG_MESSAGE_MODEL,
-      index: true,
-    },
-    threadId: {
-      type: Schema.Types.ObjectId,
-      ref: STAFF_MESSAGE_MODEL,
-      index: true,
-    },
-    body: { type: String, required: true },
-    replyBody: { type: String },
-    status: {
-      type: String,
-      required: true,
-      enum: ['sent', 'failed', 'received'],
-    },
-    providerMessageId: String,
-    error: String,
-    source: {
-      type: String,
-      enum: ['test', 'remind', 'dispatch', 'catalog', 'webhook'],
-    },
-    sentAt: Date,
-    receivedAt: Date,
-    repliedAt: Date,
-    responseLatencyMs: { type: Number, min: 0 },
-    responseStatus: {
-      type: String,
-      enum: ['green', 'yellow', 'red', 'pending', 'neutral'],
-    },
-  },
-  { timestamps: true },
-);
+    { timestamps: true },
+  );
 staffMessageSchema.index({ contactId: 1, direction: 1, createdAt: -1 });
 staffMessageSchema.index({ phone: 1, direction: 1, createdAt: -1 });
 staffMessageSchema.index({
@@ -281,16 +283,17 @@ staffMessageSchema.index({
   sentAt: -1,
 });
 
-export const staffCatalogMessageSchema = new Schema<StaffCatalogMessage>(
-  {
-    title: { type: String, required: true, trim: true },
-    body: { type: String, required: true },
-    assignedContactId: {
-      type: Schema.Types.ObjectId,
-      ref: WHATSAPP_CONTACT_MODEL,
-      index: true,
+export const staffCatalogMessageSchema: Schema<StaffCatalogMessage> =
+  new Schema<StaffCatalogMessage>(
+    {
+      title: { type: String, required: true, trim: true },
+      body: { type: String, required: true },
+      assignedContactId: {
+        type: Schema.Types.ObjectId,
+        ref: WHATSAPP_CONTACT_MODEL,
+        index: true,
+      },
+      active: { type: Boolean, required: true, default: true },
     },
-    active: { type: Boolean, required: true, default: true },
-  },
-  { timestamps: true },
-);
+    { timestamps: true },
+  );

@@ -255,4 +255,50 @@ describe('AccountService', () => {
       }),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
+
+  it('rejects when the update race loses the account document', async () => {
+    accounts.findById.mockResolvedValue({
+      email: 'person@example.com',
+      language: 'es',
+      emailNotificationSchedule: null,
+    });
+    accounts.findByIdAndUpdate.mockResolvedValue(null);
+
+    await expect(
+      service.updateSettings('507f1f77bcf86cd799439011', {
+        language: 'en',
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('forwards deprecated updateSchedule to updateSettings', async () => {
+    accounts.findById.mockResolvedValue({
+      email: 'person@example.com',
+      language: 'es',
+      emailNotificationSchedule: {
+        enabled: false,
+        frequency: 'weekly',
+        daysOfWeek: [1],
+        dayOfMonth: 1,
+        sendTime: '09:00',
+        timezone: 'UTC',
+      },
+    });
+    accounts.findByIdAndUpdate.mockResolvedValue({
+      email: 'person@example.com',
+      language: 'es',
+    });
+
+    const result = await service.updateSchedule('507f1f77bcf86cd799439011', {
+      enabled: true,
+      frequency: 'weekly',
+      daysOfWeek: [2],
+      dayOfMonth: 1,
+      sendTime: '10:00',
+      timezone: 'UTC',
+    });
+
+    expect(result.emailSchedule.enabled).toBe(true);
+    expect(result.emailSchedule.sendTime).toBe('10:00');
+  });
 });
