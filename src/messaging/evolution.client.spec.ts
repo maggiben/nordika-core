@@ -1,40 +1,51 @@
+jest.mock('../config/environment', () => ({
+  getEvolutionConfig: jest.fn(),
+}));
+
+import { getEvolutionConfig } from '../config/environment';
+import { LocaleService } from '../i18n/locale.service';
 import { EvolutionClient } from './evolution.client';
+
+const mockedGetEvolutionConfig = jest.mocked(getEvolutionConfig);
 
 describe('EvolutionClient', () => {
   const originalFetch = global.fetch;
+  const locales = new LocaleService();
 
   afterEach(() => {
     global.fetch = originalFetch;
+    mockedGetEvolutionConfig.mockReset();
   });
 
   it('reports when it is not configured', () => {
-    expect(new EvolutionClient(null).isConfigured()).toBe(false);
+    mockedGetEvolutionConfig.mockReturnValue(null);
+    expect(new EvolutionClient(locales).isConfigured()).toBe(false);
   });
 
   it('throws when sending without configuration', async () => {
+    mockedGetEvolutionConfig.mockReturnValue(null);
     await expect(
-      new EvolutionClient(null).sendInteractive(
+      new EvolutionClient(locales).sendInteractive(
         '5491112345678',
         { text: 'x', widgets: [] },
         'x',
       ),
-    ).rejects.toThrow('Evolution API is not configured.');
+    ).rejects.toThrow('WhatsApp delivery is not configured.');
   });
 
-  it('sends text when there are no buttons', async () => {
+  it('sends text with localized input prompts', async () => {
+    mockedGetEvolutionConfig.mockReturnValue({
+      apiKey: 'key',
+      baseUrl: 'https://evolution.example',
+      instance: 'nodika',
+    });
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ key: { id: 'msg-1' } }),
     });
     global.fetch = fetchMock;
 
-    const client = new EvolutionClient({
-      apiKey: 'key',
-      baseUrl: 'https://evolution.example',
-      instance: 'nodika',
-    });
-
-    const result = await client.sendInteractive(
+    const result = await new EvolutionClient(locales).sendInteractive(
       '5491112345678',
       {
         text: 'hello',
@@ -45,102 +56,73 @@ describe('EvolutionClient', () => {
             label: 'Comentario',
             placeholder: '...',
           },
-          {
-            type: 'checkbox',
-            id: 'ok',
-            label: 'OK?',
-            options: [{ id: 'yes', label: 'Sí' }],
-          },
         ],
       },
       'hello',
+      'es',
     );
 
     expect(result.providerMessageId).toBe('msg-1');
-    expect(fetchMock).toHaveBeenCalledWith(
-      'https://evolution.example/message/sendText/nodika',
-      expect.objectContaining({ method: 'POST' }),
-    );
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string,
+    ) as { text: string };
+    expect(body.text).toContain('Responde con el texto para "comment"');
   });
 
-  it('sends buttons when button widgets are present', async () => {
+  it('flattens buttons into sendText (Baileys cannot deliver viewOnce buttons)', async () => {
+    mockedGetEvolutionConfig.mockReturnValue({
+      apiKey: 'key',
+      baseUrl: 'https://evolution.example/',
+      instance: 'nodika',
+    });
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({}),
     });
     global.fetch = fetchMock;
 
-    const client = new EvolutionClient({
-      apiKey: 'key',
-      baseUrl: 'https://evolution.example/',
-      instance: 'nodika',
-    });
-
-    await client.sendInteractive(
+    await new EvolutionClient(locales).sendInteractive(
       '5491112345678',
       {
         title: 'Status',
         text: '30%',
         footer: 'Nodika',
-        widgets: [
-          { type: 'button', id: 'ack', label: 'Recibido' },
-          {
-            type: 'button',
-            id: 'site',
-            label: 'Sitio',
-            action: 'url',
-            url: 'https://nodika.example',
-          },
-          {
-            type: 'button',
-            id: 'call',
-            label: 'Llamar',
-            action: 'call',
-            phoneNumber: '5491112345678',
-          },
-        ],
+        widgets: [{ type: 'button', id: 'ack', label: 'Recibido' }],
       },
       '30%',
+      'es',
     );
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://evolution.example/message/sendButtons/nodika',
+      'https://evolution.example/message/sendText/nodika',
       expect.objectContaining({ method: 'POST' }),
     );
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string,
+    ) as { text: string };
+    expect(body.text).toContain('*Status*');
+    expect(body.text).toContain('Responde "ack" para "Recibido".');
+    expect(body.text).toContain('_Nodika_');
   });
 
-  it('tolerates invalid JSON bodies from Evolution', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.reject(new Error('bad json')),
-    });
-
-    const client = new EvolutionClient({
+  it('throws when Evolution returns a non-OK status', async () => {
+    mockedGetEvolutionConfig.mockReturnValue({
       apiKey: 'key',
       baseUrl: 'https://evolution.example',
       instance: 'nodika',
     });
-
-    await expect(
-      client.sendInteractive('5491112345678', { text: 'x', widgets: [] }, 'x'),
-    ).resolves.toEqual({ providerMessageId: undefined, raw: undefined });
-  });
-
-  it('throws when Evolution returns a non-OK status', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: false,
       status: 500,
       json: () => Promise.resolve({ error: 'boom' }),
     });
 
-    const client = new EvolutionClient({
-      apiKey: 'key',
-      baseUrl: 'https://evolution.example',
-      instance: 'nodika',
-    });
-
     await expect(
-      client.sendInteractive('5491112345678', { text: 'x', widgets: [] }, 'x'),
-    ).rejects.toThrow('Evolution API request failed with status 500.');
+      new EvolutionClient(locales).sendInteractive(
+        '5491112345678',
+        { text: 'x', widgets: [] },
+        'x',
+      ),
+    ).rejects.toThrow('WhatsApp provider rejected the message (status 500).');
   });
 });

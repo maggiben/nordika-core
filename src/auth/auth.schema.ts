@@ -14,6 +14,7 @@ export interface Account {
   emailVerifiedAt?: Date;
   identities: { provider: string; subject: string }[];
   roles: string[];
+  language?: string;
   emailNotificationSchedule?: EmailNotificationSchedule;
 }
 export interface LocalCredential {
@@ -59,6 +60,12 @@ export const accountSchema = new Schema<Account>(
       },
     ],
     roles: { type: [String], required: true },
+    language: {
+      type: String,
+      enum: ['es', 'en'],
+      default: 'es',
+      trim: true,
+    },
     emailNotificationSchedule: {
       enabled: { type: Boolean, default: false },
       frequency: {

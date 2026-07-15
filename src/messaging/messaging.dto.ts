@@ -3,26 +3,54 @@ import {
   IsArray,
   IsBoolean,
   IsDateString,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
   IsString,
   Length,
+  Matches,
   Max,
   Min,
   ValidateNested,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
+import { normalizeLanguage } from '../i18n/languages';
+
+function toDigitPhone(value: unknown): unknown {
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    return value;
+  }
+  return String(value).replace(/\D/g, '');
+}
+
+function toAppLanguage(value: unknown): unknown {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+  if (typeof value !== 'string') {
+    return value;
+  }
+  return normalizeLanguage(value);
+}
 
 export class CreateContactDto {
+  @Transform(({ value }) => toDigitPhone(value))
   @IsString()
-  @Length(8, 20)
+  @Matches(/^\d{8,20}$/, {
+    message: 'phone must contain 8–20 digits (E.164 without +).',
+  })
   phone!: string;
 
   @IsOptional()
   @IsString()
   @Length(1, 120)
   label?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => toAppLanguage(value))
+  @IsIn(['es', 'en'])
+  language?: 'es' | 'en';
 
   @IsOptional()
   @IsBoolean()
@@ -40,6 +68,11 @@ export class UpdateContactDto {
   @IsString()
   @Length(1, 120)
   label?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => toAppLanguage(value))
+  @IsIn(['es', 'en'])
+  language?: 'es' | 'en';
 
   @IsOptional()
   @IsBoolean()
@@ -222,56 +255,6 @@ export class InboundMessageDto {
   providerMessageId?: string;
 }
 
-export class TestSendDto {
-  @IsString()
-  @Length(8, 20)
-  phone!: string;
-
-  @IsString()
-  @Length(1, 64)
-  templateKey!: string;
-
-  @IsOptional()
-  @IsString()
-  @Length(0, 120)
-  percent?: string;
-
-  @IsOptional()
-  @IsString()
-  @Length(0, 120)
-  duration?: string;
-
-  @IsOptional()
-  @IsString()
-  @Length(0, 500)
-  avance?: string;
-
-  @IsOptional()
-  @IsString()
-  @Length(0, 1000)
-  notes?: string;
-
-  @IsOptional()
-  @IsString()
-  @Length(0, 32)
-  week?: string;
-
-  @IsOptional()
-  @IsString()
-  @Length(0, 120)
-  ciclo_name?: string;
-
-  @IsOptional()
-  @IsString()
-  @Length(0, 32)
-  ciclo_inicio?: string;
-
-  @IsOptional()
-  @IsString()
-  @Length(0, 32)
-  ciclo_fin?: string;
-}
-
 export class CreateCatalogMessageDto {
   @IsString()
   @Length(1, 160)
@@ -323,4 +306,62 @@ export class SendCatalogMessageDto {
   @IsString()
   @Length(1, 64)
   contactId?: string;
+}
+
+export class TestSendDto {
+  @Transform(({ value }) => toDigitPhone(value))
+  @IsString()
+  @Matches(/^\d{8,20}$/, {
+    message: 'phone must contain 8–20 digits (E.164 without +).',
+  })
+  phone!: string;
+
+  @IsString()
+  @Length(1, 64)
+  templateKey!: string;
+
+  @IsOptional()
+  @Transform(({ value }) => toAppLanguage(value))
+  @IsIn(['es', 'en'])
+  language?: 'es' | 'en';
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 120)
+  percent?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 120)
+  duration?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 500)
+  avance?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 1000)
+  notes?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 32)
+  week?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 120)
+  ciclo_name?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 32)
+  ciclo_inicio?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 32)
+  ciclo_fin?: string;
 }

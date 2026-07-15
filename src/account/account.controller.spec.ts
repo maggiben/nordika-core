@@ -3,7 +3,7 @@ import { AccountController } from './account.controller';
 describe('AccountController', () => {
   const accounts = {
     getSettings: jest.fn(),
-    updateSchedule: jest.fn(),
+    updateSettings: jest.fn(),
   };
   const auth = {
     changePassword: jest.fn(),
@@ -12,7 +12,7 @@ describe('AccountController', () => {
 
   beforeEach(() => {
     accounts.getSettings.mockReset();
-    accounts.updateSchedule.mockReset();
+    accounts.updateSettings.mockReset();
     auth.changePassword.mockReset();
   });
 
@@ -23,9 +23,10 @@ describe('AccountController', () => {
     ).resolves.toEqual({ email: 'person@example.com' });
   });
 
-  it('delegates schedule updates', async () => {
-    accounts.updateSchedule.mockResolvedValue({ ok: true });
+  it('delegates settings updates including language', async () => {
+    accounts.updateSettings.mockResolvedValue({ ok: true });
     const dto = {
+      language: 'es' as const,
       enabled: true,
       frequency: 'weekly' as const,
       daysOfWeek: [1],
@@ -38,7 +39,7 @@ describe('AccountController', () => {
         dto,
       ),
     ).resolves.toEqual({ ok: true });
-    expect(accounts.updateSchedule).toHaveBeenCalledWith('account-id', dto);
+    expect(accounts.updateSettings).toHaveBeenCalledWith('account-id', dto);
   });
 
   it('changes passwords for the authenticated account', async () => {

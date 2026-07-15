@@ -21,7 +21,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "spec:list": "openspec list",
     "spec:validate": "openspec validate --all --strict",
-    "prepare": "husky"
+    "prepare": "node scripts/ensure-nestjs-package-entries.mjs && husky"
   },
   "dependencies": {
     "@keyv/redis": "^5.1.6",

@@ -12,7 +12,7 @@ import type { Request } from 'express';
 import { AuthService } from '../auth/auth.service';
 import { AuthenticatedUser } from '../auth/jwt.strategy';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { ChangePasswordDto, UpdateEmailScheduleDto } from './account.dto';
+import { ChangePasswordDto, UpdateAccountSettingsDto } from './account.dto';
 import { AccountService } from './account.service';
 
 type AuthenticatedRequest = Request & { user: AuthenticatedUser };
@@ -36,9 +36,9 @@ export class AccountController {
   @UseGuards(JwtAuthGuard)
   updateSettings(
     @Req() request: AuthenticatedRequest,
-    @Body() dto: UpdateEmailScheduleDto,
+    @Body() dto: UpdateAccountSettingsDto,
   ) {
-    return this.accounts.updateSchedule(request.user.subject, dto);
+    return this.accounts.updateSettings(request.user.subject, dto);
   }
 
   @Post('change-password')

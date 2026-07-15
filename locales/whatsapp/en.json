@@ -1,0 +1,38 @@
+{
+  "templates": {
+    "weekly_status": {
+      "name": "Weekly progress check-in",
+      "description": "Weekly message to ask for percent complete, duration, and progress.",
+      "title": "{{ciclo_name}}",
+      "text": "Cycle {{ciclo_inicio}} → {{ciclo_fin}}\nWeek {{week}}: {{percent}}%\nDuration: {{duration}}\nProgress: {{avance}}\nNotes: {{notes}}",
+      "footer": "Nodika",
+      "widgets": [
+        {
+          "type": "button",
+          "id": "ack",
+          "label": "Received"
+        },
+        {
+          "type": "input",
+          "id": "comentario",
+          "label": "Comment",
+          "placeholder": "Optional"
+        },
+        {
+          "type": "checkbox",
+          "id": "bloqueos",
+          "label": "Any blockers?",
+          "options": [
+            { "id": "si", "label": "Yes" },
+            { "id": "no", "label": "No" }
+          ]
+        }
+      ]
+    }
+  },
+  "prompts": {
+    "inputReply": "Reply with text for \"{{id}}\".",
+    "checkboxOption": "{{label}} → reply \"{{id}}\"",
+    "buttonReply": "Reply \"{{id}}\" for \"{{label}}\"."
+  }
+}

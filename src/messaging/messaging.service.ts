@@ -9,6 +9,9 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { MESSAGING_CACHE_PATHS } from '../cache/cache.constants';
 import { OptionalCacheService } from '../cache/optional-cache.service';
+import { getWhatsAppDefaultLanguage } from '../config/environment';
+import { LocaleService } from '../i18n/locale.service';
+import { normalizeLanguage } from '../i18n/languages';
 import { EvolutionClient } from './evolution.client';
 import {
   CreateCatalogMessageDto,
@@ -115,6 +118,7 @@ export class MessagingService {
     private readonly catalog: Model<StaffCatalogMessageDocument>,
     private readonly evolution: EvolutionClient,
     private readonly cache: OptionalCacheService,
+    private readonly locales: LocaleService,
   ) {}
 
   normalizePhone(phone: string): string {
@@ -131,8 +135,9 @@ export class MessagingService {
     const contact = await this.contacts.create({
       phone: this.normalizePhone(dto.phone),
       label: dto.label,
+      language: normalizeLanguage(dto.language, getWhatsAppDefaultLanguage()),
       active: dto.active ?? true,
-      tags: dto.tags ?? [],
+      tags: dto.tags ?? ['staff'],
     });
     await this.cache.invalidatePaths([
       MESSAGING_CACHE_PATHS.contacts,
@@ -181,8 +186,46 @@ export class MessagingService {
     return template;
   }
 
-  async listTemplates(): Promise<MessageTemplateDocument[]> {
-    return this.templates.find().sort({ createdAt: -1 }).exec();
+  async listTemplates(language?: string): Promise<
+    Array<{
+      key: string;
+      name: string;
+      description?: string;
+      format: 'interactive_v1';
+      language: string;
+      source: 'locale' | 'database';
+      body: InteractiveTemplateBody;
+      active: boolean;
+    }>
+  > {
+    const lang = normalizeLanguage(language, getWhatsAppDefaultLanguage());
+    const fromFiles = this.locales.listTemplates(lang).map((template) => ({
+      key: template.key,
+      name: template.name,
+      description: template.description,
+      format: 'interactive_v1' as const,
+      language: template.language,
+      source: 'locale' as const,
+      body: this.locales.toInteractiveBody(template),
+      active: true,
+    }));
+
+    const fromDb = await this.templates.find().sort({ createdAt: -1 }).exec();
+    const fileKeys = new Set(fromFiles.map((template) => template.key));
+    const extras = fromDb
+      .filter((template) => !fileKeys.has(template.key))
+      .map((template) => ({
+        key: template.key,
+        name: template.name,
+        description: template.description,
+        format: 'interactive_v1' as const,
+        language: lang,
+        source: 'database' as const,
+        body: template.body,
+        active: template.active,
+      }));
+
+    return [...fromFiles, ...extras];
   }
 
   async updateTemplate(
@@ -225,14 +268,7 @@ export class MessagingService {
       );
     }
 
-    const template = await this.templates
-      .findOne({ key: dto.templateKey, active: true })
-      .exec();
-    if (!template) {
-      throw new BadRequestException(
-        `Active template "${dto.templateKey}" was not found.`,
-      );
-    }
+    await this.assertTemplateExists(dto.templateKey);
 
     const ciclo = await this.ciclos.create({
       name: dto.name.trim(),
@@ -258,14 +294,7 @@ export class MessagingService {
     }
 
     if (dto.templateKey) {
-      const template = await this.templates
-        .findOne({ key: dto.templateKey, active: true })
-        .exec();
-      if (!template) {
-        throw new BadRequestException(
-          `Active template "${dto.templateKey}" was not found.`,
-        );
-      }
+      await this.assertTemplateExists(dto.templateKey);
       existing.templateKey = dto.templateKey;
     }
     if (dto.name !== undefined) {
@@ -354,15 +383,17 @@ export class MessagingService {
   }> {
     if (!this.evolution.isConfigured()) {
       throw new ServiceUnavailableException(
-        'WhatsApp messaging is not configured (Evolution API).',
+        'WhatsApp delivery is not configured.',
       );
     }
 
     const phone = this.normalizePhone(dto.phone);
-    const template = await this.templates
-      .findOne({ key: dto.templateKey, active: true })
-      .exec();
-    if (!template) {
+    const language = normalizeLanguage(
+      dto.language,
+      getWhatsAppDefaultLanguage(),
+    );
+    const body = await this.resolveTemplateBody(dto.templateKey, language);
+    if (!body) {
       throw new NotFoundException(`Template ${dto.templateKey} was not found.`);
     }
 
@@ -377,13 +408,13 @@ export class MessagingService {
       ciclo_fin: dto.ciclo_fin ?? '2026-03-31',
     };
 
-    const renderedText = renderTemplateText(template.body.text, variables);
+    const renderedText = renderTemplateText(body.text, variables);
     const renderedBody: InteractiveTemplateBody = {
-      ...template.body,
+      ...body,
       text: renderedText,
-      title: template.body.title
-        ? renderTemplateText(template.body.title, variables)
-        : template.body.title,
+      title: body.title
+        ? renderTemplateText(body.title, variables)
+        : body.title,
     };
 
     const contact = await this.contacts.findOne({ phone }).exec();
@@ -393,6 +424,7 @@ export class MessagingService {
         phone,
         renderedBody,
         renderedText,
+        language,
       );
 
       if (contact) {
@@ -405,6 +437,9 @@ export class MessagingService {
           status: 'sent',
           providerMessageId: result.providerMessageId,
           sentAt: new Date(),
+          receivedAt: new Date(),
+          responseStatus: 'pending',
+          source: 'test',
         });
       }
 
@@ -428,6 +463,8 @@ export class MessagingService {
           status: 'failed',
           error: message,
           sentAt: new Date(),
+          source: 'test',
+          responseStatus: 'neutral',
         });
       }
       throw error;
@@ -436,9 +473,11 @@ export class MessagingService {
 
   async listStaffRoster(): Promise<StaffRosterRow[]> {
     const contacts = await this.contacts.find({ active: true }).exec();
-    const staff = contacts.filter((contact) =>
-      (contact.tags ?? []).includes('staff'),
-    );
+    const staff = contacts.filter((contact) => {
+      const tags = contact.tags ?? [];
+      // Legacy contacts without tags are treated as staff for the roster UI.
+      return tags.length === 0 || tags.includes('staff');
+    });
 
     const rows: StaffRosterRow[] = [];
     for (const contact of staff) {
@@ -502,7 +541,7 @@ export class MessagingService {
   }> {
     if (!this.evolution.isConfigured()) {
       throw new ServiceUnavailableException(
-        'WhatsApp messaging is not configured (Evolution API).',
+        'WhatsApp delivery is not configured.',
       );
     }
 
@@ -533,12 +572,17 @@ export class MessagingService {
       text: previous.body,
       widgets: [],
     };
+    const language = normalizeLanguage(
+      contact.language,
+      getWhatsAppDefaultLanguage(),
+    );
 
     try {
       const result = await this.evolution.sendInteractive(
         contact.phone,
         body,
         previous.body,
+        language,
       );
       await this.recordStaffMessage({
         contactId: contact._id,
@@ -549,6 +593,9 @@ export class MessagingService {
         status: 'sent',
         providerMessageId: result.providerMessageId,
         sentAt: new Date(),
+        receivedAt: new Date(),
+        responseStatus: 'pending',
+        source: 'remind',
       });
       return {
         ok: true,
@@ -569,171 +616,11 @@ export class MessagingService {
         status: 'failed',
         error: message,
         sentAt: new Date(),
+        source: 'remind',
+        responseStatus: 'neutral',
       });
       throw error;
     }
-  }
-
-  extractInboundFromEvolution(
-    payload: Record<string, unknown>,
-  ): InboundMessageDto | null {
-    const data =
-      payload.data && typeof payload.data === 'object'
-        ? (payload.data as Record<string, unknown>)
-        : payload;
-
-    const key =
-      typeof data.key === 'object' && data.key !== null
-        ? (data.key as Record<string, unknown>)
-        : undefined;
-    const fromMe = key?.fromMe === true;
-    if (fromMe) {
-      return null;
-    }
-
-    const remote =
-      (typeof key?.remoteJid === 'string' && key.remoteJid) ||
-      (typeof data.remoteJid === 'string' && data.remoteJid) ||
-      (typeof data.from === 'string' && data.from) ||
-      '';
-    const phoneDigits = remote.replace(/\D/g, '').replace(/@.*$/, '');
-    if (phoneDigits.length < 8) {
-      return null;
-    }
-
-    const message =
-      data.message && typeof data.message === 'object'
-        ? (data.message as Record<string, unknown>)
-        : undefined;
-    const conversation =
-      (typeof message?.conversation === 'string' && message.conversation) ||
-      (typeof (message?.extendedTextMessage as { text?: string } | undefined)
-        ?.text === 'string' &&
-        (message?.extendedTextMessage as { text: string }).text) ||
-      (typeof data.body === 'string' && data.body) ||
-      (typeof data.text === 'string' && data.text) ||
-      '';
-
-    const providerMessageId =
-      (typeof key?.id === 'string' && key.id) ||
-      (typeof data.id === 'string' && data.id) ||
-      undefined;
-
-    return {
-      phone: phoneDigits.slice(0, 20),
-      body: conversation || '(respuesta recibida)',
-      providerMessageId,
-    };
-  }
-
-  async recordInboundMessage(dto: InboundMessageDto): Promise<{
-    ok: true;
-    contactId: string | null;
-    phone: string;
-    threadId: string | null;
-    responseLatencyMs: number | null;
-    responseStatus: string | null;
-  }> {
-    const phone = this.normalizePhone(dto.phone);
-    const replyBody =
-      (dto.body ?? dto.text ?? '').trim() || '(respuesta recibida)';
-    const repliedAt = new Date();
-    const contact = await this.contacts.findOne({ phone }).exec();
-    if (!contact) {
-      this.logger.warn(`Inbound message for unknown phone ${phone}`);
-      return {
-        ok: true,
-        contactId: null,
-        phone,
-        threadId: null,
-        responseLatencyMs: null,
-        responseStatus: null,
-      };
-    }
-
-    const recentOutbound = await this.messages
-      .find({
-        contactId: contact._id,
-        direction: 'outbound',
-        status: 'sent',
-      })
-      .sort({ sentAt: -1, createdAt: -1 })
-      .limit(25)
-      .exec();
-    const windowStart = repliedAt.getTime() - this.replyMatchWindowMs;
-    const openThread = recentOutbound.find((item) => {
-      if (item.repliedAt) {
-        return false;
-      }
-      const sentAt =
-        item.sentAt ??
-        (item as StaffMessageDocument & { createdAt?: Date }).createdAt;
-      if (!sentAt) {
-        return false;
-      }
-      return sentAt.getTime() >= windowStart;
-    });
-
-    let responseLatencyMs: number | null = null;
-    let responseStatus: StaffResponseTrafficLight | null = null;
-    let threadId: Types.ObjectId | null = null;
-
-    if (openThread?.sentAt) {
-      responseLatencyMs = computeResponseLatencyMs(
-        openThread.sentAt,
-        repliedAt,
-      );
-      responseStatus = responseStatusFromLatencyMs(responseLatencyMs);
-      threadId = openThread.threadId ?? openThread._id;
-      openThread.replyBody = replyBody;
-      openThread.repliedAt = repliedAt;
-      openThread.receivedAt = openThread.receivedAt ?? openThread.sentAt;
-      openThread.responseLatencyMs = responseLatencyMs;
-      openThread.responseStatus = responseStatus;
-      if (openThread.save) {
-        await openThread.save();
-      } else {
-        await this.messages
-          .findByIdAndUpdate(openThread._id, {
-            replyBody,
-            repliedAt,
-            receivedAt: openThread.receivedAt,
-            responseLatencyMs,
-            responseStatus,
-            threadId,
-          })
-          .exec();
-      }
-    }
-
-    await this.recordStaffMessage({
-      contactId: contact._id,
-      phone,
-      direction: 'inbound',
-      body: replyBody,
-      status: 'received',
-      providerMessageId: dto.providerMessageId,
-      receivedAt: repliedAt,
-      repliedAt,
-      threadId: threadId ?? undefined,
-      source: 'webhook',
-      catalogMessageId: openThread?.catalogMessageId,
-      title: openThread?.title,
-      responseLatencyMs: responseLatencyMs ?? undefined,
-      responseStatus: responseStatus ?? undefined,
-    });
-    await this.cache.invalidatePaths([
-      MESSAGING_CACHE_PATHS.roster,
-      MESSAGING_CACHE_PATHS.catalog,
-    ]);
-    return {
-      ok: true,
-      contactId: String(contact._id),
-      phone,
-      threadId: threadId ? String(threadId) : null,
-      responseLatencyMs,
-      responseStatus,
-    };
   }
 
   async createCatalogMessage(
@@ -856,12 +743,17 @@ export class MessagingService {
       title: catalogMessage.title,
       widgets: [],
     };
+    const language = normalizeLanguage(
+      contact.language,
+      getWhatsAppDefaultLanguage(),
+    );
 
     try {
       const result = await this.evolution.sendInteractive(
         contact.phone,
         interactive,
         catalogMessage.body,
+        language,
       );
       const recorded = await this.recordStaffMessage({
         contactId: contact._id,
@@ -911,6 +803,167 @@ export class MessagingService {
     }
   }
 
+  extractInboundFromEvolution(
+    payload: Record<string, unknown>,
+  ): InboundMessageDto | null {
+    const data =
+      payload.data && typeof payload.data === 'object'
+        ? (payload.data as Record<string, unknown>)
+        : payload;
+
+    const key =
+      typeof data.key === 'object' && data.key !== null
+        ? (data.key as Record<string, unknown>)
+        : undefined;
+    if (key?.fromMe === true) {
+      return null;
+    }
+
+    const remote =
+      (typeof key?.remoteJid === 'string' && key.remoteJid) ||
+      (typeof data.remoteJid === 'string' && data.remoteJid) ||
+      (typeof data.from === 'string' && data.from) ||
+      '';
+    const phoneDigits = remote.replace(/\D/g, '').replace(/@.*$/, '');
+    if (phoneDigits.length < 8) {
+      return null;
+    }
+
+    const message =
+      data.message && typeof data.message === 'object'
+        ? (data.message as Record<string, unknown>)
+        : undefined;
+    const conversation =
+      (typeof message?.conversation === 'string' && message.conversation) ||
+      (typeof (message?.extendedTextMessage as { text?: string } | undefined)
+        ?.text === 'string' &&
+        (message?.extendedTextMessage as { text: string }).text) ||
+      (typeof data.body === 'string' && data.body) ||
+      (typeof data.text === 'string' && data.text) ||
+      '';
+
+    const providerMessageId =
+      (typeof key?.id === 'string' && key.id) ||
+      (typeof data.id === 'string' && data.id) ||
+      undefined;
+
+    return {
+      phone: phoneDigits.slice(0, 20),
+      body: conversation || '(respuesta recibida)',
+      providerMessageId,
+    };
+  }
+
+  async recordInboundMessage(dto: InboundMessageDto): Promise<{
+    ok: true;
+    contactId: string | null;
+    phone: string;
+    threadId: string | null;
+    responseLatencyMs: number | null;
+    responseStatus: string | null;
+  }> {
+    const phone = this.normalizePhone(dto.phone);
+    const replyBody =
+      (dto.body ?? dto.text ?? '').trim() || '(respuesta recibida)';
+    const repliedAt = new Date();
+    const contact = await this.findContactByPhone(phone);
+    if (!contact) {
+      this.logger.warn(`Inbound message for unknown phone ${phone}`);
+      return {
+        ok: true,
+        contactId: null,
+        phone,
+        threadId: null,
+        responseLatencyMs: null,
+        responseStatus: null,
+      };
+    }
+
+    const recentOutbound = await this.messages
+      .find({
+        contactId: contact._id,
+        direction: 'outbound',
+        status: 'sent',
+      })
+      .sort({ sentAt: -1, createdAt: -1 })
+      .limit(25)
+      .exec();
+    const windowStart = repliedAt.getTime() - this.replyMatchWindowMs;
+    const openThread = recentOutbound.find((item) => {
+      if (item.repliedAt) {
+        return false;
+      }
+      const sentAt =
+        item.sentAt ??
+        (item as StaffMessageDocument & { createdAt?: Date }).createdAt;
+      if (!sentAt) {
+        return false;
+      }
+      return sentAt.getTime() >= windowStart;
+    });
+
+    let responseLatencyMs: number | null = null;
+    let responseStatus: StaffResponseTrafficLight | null = null;
+    let threadId: Types.ObjectId | null = null;
+
+    if (openThread?.sentAt) {
+      responseLatencyMs = computeResponseLatencyMs(
+        openThread.sentAt,
+        repliedAt,
+      );
+      responseStatus = responseStatusFromLatencyMs(responseLatencyMs);
+      threadId = openThread.threadId ?? openThread._id;
+      openThread.replyBody = replyBody;
+      openThread.repliedAt = repliedAt;
+      openThread.receivedAt = openThread.receivedAt ?? openThread.sentAt;
+      openThread.responseLatencyMs = responseLatencyMs;
+      openThread.responseStatus = responseStatus;
+      if (openThread.save) {
+        await openThread.save();
+      } else {
+        await this.messages
+          .findByIdAndUpdate(openThread._id, {
+            replyBody,
+            repliedAt,
+            receivedAt: openThread.receivedAt,
+            responseLatencyMs,
+            responseStatus,
+            threadId,
+          })
+          .exec();
+      }
+    }
+
+    await this.recordStaffMessage({
+      contactId: contact._id,
+      phone: contact.phone,
+      direction: 'inbound',
+      body: replyBody,
+      status: 'received',
+      providerMessageId: dto.providerMessageId,
+      receivedAt: repliedAt,
+      repliedAt,
+      threadId: threadId ?? undefined,
+      source: 'webhook',
+      catalogMessageId: openThread?.catalogMessageId,
+      title: openThread?.title,
+      responseLatencyMs: responseLatencyMs ?? undefined,
+      responseStatus: responseStatus ?? undefined,
+    });
+    await this.cache.invalidatePaths([
+      MESSAGING_CACHE_PATHS.roster,
+      MESSAGING_CACHE_PATHS.catalog,
+    ]);
+    return {
+      ok: true,
+      contactId: String(contact._id),
+      phone: contact.phone,
+      threadId: threadId ? String(threadId) : null,
+      responseLatencyMs,
+      responseStatus,
+    };
+  }
+
   async runWeeklyStatusDispatch(
     asOf: Date = new Date(),
   ): Promise<WeeklyDispatchSummary[]> {
@@ -933,18 +986,16 @@ export class MessagingService {
       const status = await this.workStatuses
         .findOne({ cicloId: ciclo._id, weekNumber })
         .exec();
-      const template = await this.templates
-        .findOne({ key: ciclo.templateKey, active: true })
-        .exec();
+      const templateAvailable = await this.templateExists(ciclo.templateKey);
 
       let sent = 0;
       let failed = 0;
       let skipped = 0;
 
-      if (!template || !status) {
+      if (!templateAvailable || !status) {
         this.logger.warn(
           `Skipping ciclo ${String(ciclo._id)} week ${weekNumber}: missing ${
-            !template ? 'template' : 'work status'
+            !templateAvailable ? 'template' : 'work status'
           }.`,
         );
         for (const contact of contacts) {
@@ -956,7 +1007,7 @@ export class MessagingService {
             weekNumber,
             status: 'skipped',
             renderedText: '',
-            error: !template
+            error: !templateAvailable
               ? 'Active template missing'
               : 'Work status missing for this week',
           });
@@ -972,34 +1023,6 @@ export class MessagingService {
         continue;
       }
 
-      const renderedText = renderTemplateText(template.body.text, {
-        percent: String(status.percent),
-        duration: status.duration ?? '',
-        avance: status.avance ?? '',
-        ciclo_inicio: formatDateOnly(ciclo.ciclo_inicio),
-        ciclo_fin: formatDateOnly(ciclo.ciclo_fin),
-        week: String(weekNumber),
-        ciclo_name: ciclo.name,
-        notes: status.notes ?? '',
-      });
-
-      const renderedBody: InteractiveTemplateBody = {
-        ...template.body,
-        text: renderedText,
-        title: template.body.title
-          ? renderTemplateText(template.body.title, {
-              percent: String(status.percent),
-              duration: status.duration ?? '',
-              avance: status.avance ?? '',
-              ciclo_inicio: formatDateOnly(ciclo.ciclo_inicio),
-              ciclo_fin: formatDateOnly(ciclo.ciclo_fin),
-              week: String(weekNumber),
-              ciclo_name: ciclo.name,
-              notes: status.notes ?? '',
-            })
-          : template.body.title,
-      };
-
       for (const contact of contacts) {
         const alreadySent = await this.dispatches
           .exists({
@@ -1014,29 +1037,54 @@ export class MessagingService {
           continue;
         }
 
+        const language = normalizeLanguage(
+          contact.language,
+          getWhatsAppDefaultLanguage(),
+        );
+        const body = await this.resolveTemplateBody(
+          ciclo.templateKey,
+          language,
+        );
+        if (!body || !status) {
+          skipped += 1;
+          continue;
+        }
+
+        const variables = {
+          percent: String(status.percent),
+          duration: status.duration ?? '',
+          avance: status.avance ?? '',
+          ciclo_inicio: formatDateOnly(ciclo.ciclo_inicio),
+          ciclo_fin: formatDateOnly(ciclo.ciclo_fin),
+          week: String(weekNumber),
+          ciclo_name: ciclo.name,
+          notes: status.notes ?? '',
+        };
+
+        const renderedText = renderTemplateText(body.text, variables);
+        const renderedBody: InteractiveTemplateBody = {
+          ...body,
+          text: renderedText,
+          title: body.title
+            ? renderTemplateText(body.title, variables)
+            : body.title,
+        };
+
         try {
           await this.evolution.sendInteractive(
             contact.phone,
             renderedBody,
             renderedText,
+            language,
           );
           await this.recordDispatch({
             cicloId: ciclo._id,
             contactId: contact._id,
             phone: contact.phone,
-            templateKey: template.key,
+            templateKey: ciclo.templateKey,
             weekNumber,
             status: 'sent',
             renderedText,
-            sentAt: new Date(),
-          });
-          await this.recordStaffMessage({
-            contactId: contact._id,
-            phone: contact.phone,
-            direction: 'outbound',
-            templateKey: template.key,
-            body: renderedText,
-            status: 'sent',
             sentAt: new Date(),
           });
           sent += 1;
@@ -1047,21 +1095,11 @@ export class MessagingService {
             cicloId: ciclo._id,
             contactId: contact._id,
             phone: contact.phone,
-            templateKey: template.key,
+            templateKey: ciclo.templateKey,
             weekNumber,
             status: 'failed',
             renderedText,
             error: message,
-          });
-          await this.recordStaffMessage({
-            contactId: contact._id,
-            phone: contact.phone,
-            direction: 'outbound',
-            templateKey: template.key,
-            body: renderedText,
-            status: 'failed',
-            error: message,
-            sentAt: new Date(),
           });
           failed += 1;
         }
@@ -1078,13 +1116,46 @@ export class MessagingService {
 
     await this.cache.invalidatePaths([
       MESSAGING_CACHE_PATHS.dispatches(),
-      MESSAGING_CACHE_PATHS.roster,
       ...summaries.map((summary) =>
         MESSAGING_CACHE_PATHS.dispatches(summary.cicloId),
       ),
     ]);
 
     return summaries;
+  }
+
+  private async assertTemplateExists(templateKey: string): Promise<void> {
+    if (await this.templateExists(templateKey)) {
+      return;
+    }
+    throw new BadRequestException(
+      `Active template "${templateKey}" was not found in locales or the database.`,
+    );
+  }
+
+  private async templateExists(templateKey: string): Promise<boolean> {
+    if (this.locales.getTemplate(templateKey, 'es')) {
+      return true;
+    }
+    const template = await this.templates
+      .findOne({ key: templateKey, active: true })
+      .exec();
+    return Boolean(template);
+  }
+
+  private async resolveTemplateBody(
+    templateKey: string,
+    language: string,
+  ): Promise<InteractiveTemplateBody | null> {
+    const localeTemplate = this.locales.getTemplate(templateKey, language);
+    if (localeTemplate) {
+      return this.locales.toInteractiveBody(localeTemplate);
+    }
+
+    const template = await this.templates
+      .findOne({ key: templateKey, active: true })
+      .exec();
+    return template?.body ?? null;
   }
 
   validateTemplateBody(body: {
@@ -1246,8 +1317,18 @@ export class MessagingService {
       .exec();
     const last = deliveries[0] ?? null;
     const sentAt = last?.sentAt ?? null;
-    let responseStatus = last?.responseStatus ?? 'neutral';
-    if (last && !last.repliedAt && sentAt) {
+    const latencyMs =
+      typeof last?.responseLatencyMs === 'number'
+        ? last.responseLatencyMs
+        : null;
+    let responseStatus: string = 'neutral';
+    if (last?.repliedAt && latencyMs !== null) {
+      responseStatus = responseStatusFromLatencyMs(latencyMs);
+    } else if (last?.repliedAt && sentAt) {
+      responseStatus = responseStatusFromLatencyMs(
+        computeResponseLatencyMs(sentAt, last.repliedAt),
+      );
+    } else if (last && !last.repliedAt && sentAt) {
       responseStatus = responseStatusWhileWaiting(sentAt);
     }
 
@@ -1263,12 +1344,32 @@ export class MessagingService {
       active: item.active,
       lastSentAt: sentAt ? sentAt.toISOString() : null,
       repliedAt: last?.repliedAt ? last.repliedAt.toISOString() : null,
-      responseLatencyMs:
-        typeof last?.responseLatencyMs === 'number'
-          ? last.responseLatencyMs
-          : null,
+      responseLatencyMs: latencyMs,
       responseStatus,
     };
+  }
+
+  /** Match contacts even when WhatsApp JIDs omit/include country or mobile `9`. */
+  private async findContactByPhone(
+    phone: string,
+  ): Promise<WhatsAppContactDocument | null> {
+    const exact = await this.contacts.findOne({ phone }).exec();
+    if (exact) {
+      return exact;
+    }
+
+    const contacts = await this.contacts.find({ active: true }).exec();
+    const needle = phone.replace(/\D/g, '');
+    return (
+      contacts.find((contact) => {
+        const stored = contact.phone.replace(/\D/g, '');
+        if (stored === needle) {
+          return true;
+        }
+        const min = Math.min(stored.length, needle.length, 10);
+        return min >= 8 && stored.slice(-min) === needle.slice(-min);
+      }) ?? null
+    );
   }
 
   private toObjectId(id: string, label: string): Types.ObjectId {

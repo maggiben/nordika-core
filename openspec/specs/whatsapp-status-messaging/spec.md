@@ -17,20 +17,29 @@ number (digits only), optional label/tags, and an active flag.
 - **WHEN** an authenticated `message_admin` posts `POST /messaging/contacts`
 - **THEN** the service stores the contact with a digits-only phone number
 
-### Requirement: Interactive template format
+### Requirement: Locale files for WhatsApp copy
 
-Message templates SHALL use format `interactive_v1` with:
+WhatsApp message copy SHALL live outside application TypeScript in
+`locales/whatsapp/{es,en}.json`, including at least a Spanish (`es`) and
+English (`en`) catalog with template text and Evolution prompt strings.
 
-- `body.text` supporting placeholders `{{percent}}`, `{{duration}}`,
-  `{{avance}}`, `{{week}}`, `{{ciclo_inicio}}`, `{{ciclo_fin}}`,
-  `{{ciclo_name}}`, `{{notes}}`
-- `body.widgets` limited to `button`, `input`, and `checkbox`
+#### Scenario: Edit Spanish copy without code changes
 
-#### Scenario: Create a template
+- **WHEN** an operator updates `locales/whatsapp/es.json`
+- **AND** the service reloads or redeploys
+- **THEN** weekly WhatsApp messages use the updated Spanish text
 
-- **WHEN** a client posts a valid `interactive_v1` template to
-  `POST /messaging/templates`
-- **THEN** the service persists it for later weekly rendering
+### Requirement: Frontend-configurable language
+
+Authenticated accounts SHALL expose a `language` preference (`es` | `en`) via
+`GET/PATCH /account/settings`. WhatsApp contacts MAY store a per-recipient
+`language`. Dispatch SHALL render locale-file templates using
+`contact.language`, falling back to `WHATSAPP_DEFAULT_LANGUAGE` (default `es`).
+
+#### Scenario: Configure language from the frontend
+
+- **WHEN** the frontend PATCHes `/account/settings` with `{ "language": "es" }`
+- **THEN** the account preference is stored and returned on subsequent reads
 
 ### Requirement: Ciclo window
 

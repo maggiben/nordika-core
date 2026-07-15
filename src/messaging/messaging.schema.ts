@@ -32,6 +32,7 @@ export interface InteractiveTemplateBody {
 export interface WhatsAppContact {
   phone: string;
   label?: string;
+  language?: string;
   active: boolean;
   tags: string[];
 }
@@ -130,6 +131,12 @@ export const whatsAppContactSchema = new Schema<WhatsAppContact>(
   {
     phone: { type: String, required: true, unique: true, trim: true },
     label: { type: String, trim: true },
+    language: {
+      type: String,
+      enum: ['es', 'en'],
+      default: 'es',
+      trim: true,
+    },
     active: { type: Boolean, required: true, default: true },
     tags: { type: [String], required: true, default: [] },
   },

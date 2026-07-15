@@ -6,7 +6,15 @@ import {
   ACCOUNT_MODEL,
   EmailNotificationSchedule,
 } from '../auth/auth.schema';
-import { UpdateEmailScheduleDto } from './account.dto';
+import {
+  DEFAULT_LANGUAGE,
+  normalizeLanguage,
+  type AppLanguage,
+} from '../i18n/languages';
+import {
+  UpdateAccountSettingsDto,
+  UpdateEmailScheduleDto,
+} from './account.dto';
 
 const DEFAULT_SCHEDULE: EmailNotificationSchedule = {
   enabled: false,
@@ -102,39 +110,67 @@ export class AccountService {
       throw new NotFoundException('Account not found.');
     }
 
+    const language = normalizeLanguage(account.language);
     const emailSchedule = normalizeSchedule(account.emailNotificationSchedule);
 
     return {
       email: account.email,
+      language,
+      languages: ['es', 'en'] as AppLanguage[],
       emailSchedule,
       nextSendDates: computeNextSendDates(emailSchedule),
     };
   }
 
-  async updateSchedule(accountId: string, dto: UpdateEmailScheduleDto) {
-    const schedule = normalizeSchedule({
-      enabled: dto.enabled,
-      frequency: dto.frequency,
-      daysOfWeek: dto.daysOfWeek,
-      dayOfMonth: dto.dayOfMonth,
-      sendTime: dto.sendTime,
-      timezone: dto.timezone ?? DEFAULT_SCHEDULE.timezone,
-    });
-
-    const account = await this.accounts.findByIdAndUpdate(
-      new Types.ObjectId(accountId),
-      { $set: { emailNotificationSchedule: schedule } },
-      { new: true },
-    );
-
+  async updateSettings(
+    accountId: string,
+    dto: UpdateAccountSettingsDto | UpdateEmailScheduleDto,
+  ) {
+    const account = await this.accounts.findById(accountId);
     if (!account) {
       throw new NotFoundException('Account not found.');
     }
 
+    const current = normalizeSchedule(account.emailNotificationSchedule);
+    const schedule = normalizeSchedule({
+      enabled: dto.enabled ?? current.enabled,
+      frequency: dto.frequency ?? current.frequency,
+      daysOfWeek: dto.daysOfWeek ?? current.daysOfWeek,
+      dayOfMonth: dto.dayOfMonth ?? current.dayOfMonth,
+      sendTime: dto.sendTime ?? current.sendTime,
+      timezone: dto.timezone ?? current.timezone,
+    });
+
+    const language = dto.language
+      ? normalizeLanguage(dto.language)
+      : normalizeLanguage(account.language, DEFAULT_LANGUAGE);
+
+    const updated = await this.accounts.findByIdAndUpdate(
+      new Types.ObjectId(accountId),
+      {
+        $set: {
+          language,
+          emailNotificationSchedule: schedule,
+        },
+      },
+      { new: true },
+    );
+
+    if (!updated) {
+      throw new NotFoundException('Account not found.');
+    }
+
     return {
-      email: account.email,
+      email: updated.email,
+      language,
+      languages: ['es', 'en'] as AppLanguage[],
       emailSchedule: schedule,
       nextSendDates: computeNextSendDates(schedule),
     };
+  }
+
+  /** @deprecated Use updateSettings. */
+  async updateSchedule(accountId: string, dto: UpdateEmailScheduleDto) {
+    return this.updateSettings(accountId, dto);
   }
 }

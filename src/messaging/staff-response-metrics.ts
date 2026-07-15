@@ -2,10 +2,10 @@ export type StaffResponseTrafficLight =
   'green' | 'yellow' | 'red' | 'pending' | 'neutral';
 
 /** Reply within this many days → green. */
-export const STAFF_GREEN_MAX_DAYS = 2;
+export const STAFF_GREEN_MAX_DAYS = 1;
 
-/** Reply within this many days (after green) → yellow; beyond → red. */
-export const STAFF_YELLOW_MAX_DAYS = 5;
+/** Reply within this many days (after green) → yellow; beyond → red (≥3 days). */
+export const STAFF_YELLOW_MAX_DAYS = 2;
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 

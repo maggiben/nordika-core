@@ -16,6 +16,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import {
+  AssignCatalogMessageDto,
   CreateCatalogMessageDto,
   CreateCicloDto,
   CreateContactDto,
@@ -61,8 +62,8 @@ export class MessagingController {
 
   @Get('templates')
   @CacheTTL(CACHE_TTLS.MESSAGING_LIST_MS)
-  listTemplates() {
-    return this.messaging.listTemplates();
+  listTemplates(@Query('language') language?: string) {
+    return this.messaging.listTemplates(language);
   }
 
   @Patch('templates/:key')
@@ -133,7 +134,7 @@ export class MessagingController {
   @Post('catalog/:id/assign')
   assignCatalogMessage(
     @Param('id') id: string,
-    @Body() dto: { contactId: string },
+    @Body() dto: AssignCatalogMessageDto,
   ) {
     return this.messaging.assignCatalogMessage(id, dto.contactId);
   }

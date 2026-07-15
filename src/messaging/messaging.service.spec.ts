@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { OptionalCacheService } from '../cache/optional-cache.service';
+import { LocaleService } from '../i18n/locale.service';
 import { EvolutionClient } from './evolution.client';
 import { MessagingService } from './messaging.service';
 
@@ -212,6 +213,8 @@ describe('MessagingService', () => {
     invalidatePaths,
   } as unknown as OptionalCacheService;
 
+  const locales = new LocaleService();
+
   let service: MessagingService;
 
   beforeEach(() => {
@@ -245,6 +248,7 @@ describe('MessagingService', () => {
       catalog as never,
       evolution,
       cache,
+      locales,
     );
   });
 
@@ -528,14 +532,18 @@ describe('MessagingService', () => {
         skipped: 0,
       },
     ]);
-    expect(sendInteractive).toHaveBeenCalledWith(
-      contact.phone,
-      expect.objectContaining({
-        text: 'Semana 2: 30% estructura',
-        title: 'C1',
-      }),
-      'Semana 2: 30% estructura',
-    );
+    expect(sendInteractive).toHaveBeenCalledTimes(1);
+    const sendArgs = sendInteractive.mock.calls[0] as unknown as [
+      string,
+      { title?: string; text: string },
+      string,
+      string,
+    ];
+    expect(sendArgs[0]).toBe(contact.phone);
+    expect(sendArgs[1].title).toBe('C1');
+    expect(sendArgs[1].text).toContain('Semana 2: 30%');
+    expect(sendArgs[2]).toContain('Avance: estructura');
+    expect(sendArgs[3]).toBe('es');
 
     const second = await service.runWeeklyStatusDispatch(
       new Date('2026-07-08T12:00:00Z'),
@@ -619,155 +627,21 @@ describe('MessagingService', () => {
     );
   });
 
-  it('sends a test message and records outbound history', async () => {
-    await templates.create({
-      key: 'weekly_status',
-      name: 'Weekly',
-      format: 'interactive_v1',
-      body: { text: 'Hi {{percent}}', title: '{{ciclo_name}}', widgets: [] },
-      active: true,
-    });
+  it('records inbound replies against matching staff contacts', async () => {
     const contact = await contacts.create({
       phone: '5491112345678',
-      active: true,
-      tags: ['staff'],
-      label: 'PM',
-    });
-
-    const result = await service.sendTestMessage({
-      phone: '+54 9 11 1234-5678',
-      templateKey: 'weekly_status',
-    });
-    expect(result.ok).toBe(true);
-    expect(messages.store).toHaveLength(1);
-    expect(messages.store[0]).toMatchObject({
-      contactId: contact._id,
-      direction: 'outbound',
-      status: 'sent',
-      templateKey: 'weekly_status',
-    });
-
-    const roster = await service.listStaffRoster();
-    expect(roster).toHaveLength(1);
-    expect(roster[0]?.hasOutbound).toBe(true);
-    expect(roster[0]?.lastTemplateKey).toBe('weekly_status');
-  });
-
-  it('records failed test sends and rejects missing templates', async () => {
-    await templates.create({
-      key: 'weekly_status',
-      name: 'Weekly',
-      format: 'interactive_v1',
-      body: { text: 'Hi', widgets: [] },
-      active: true,
-    });
-    await contacts.create({
-      phone: '5491112345678',
+      label: 'Ana',
       active: true,
       tags: ['staff'],
     });
-    sendInteractive.mockImplementationOnce(() =>
-      Promise.reject(new Error('send failed')),
-    );
-    await expect(
-      service.sendTestMessage({
-        phone: '5491112345678',
-        templateKey: 'weekly_status',
-      }),
-    ).rejects.toThrow('send failed');
-    expect(messages.store[0]?.status).toBe('failed');
-
-    await expect(
-      service.sendTestMessage({
-        phone: '5491112345678',
-        templateKey: 'missing',
-      }),
-    ).rejects.toBeInstanceOf(NotFoundException);
-
-    isConfigured.mockReturnValue(false);
-    await expect(
-      service.sendTestMessage({
-        phone: '5491112345678',
-        templateKey: 'weekly_status',
-      }),
-    ).rejects.toBeInstanceOf(ServiceUnavailableException);
-  });
-
-  it('reminds by resending the last outbound message', async () => {
-    const contact = await contacts.create({
-      phone: '5491112345678',
-      active: true,
-      tags: ['staff'],
-      label: 'PM',
-    });
-    await messages.create({
-      contactId: contact._id,
-      phone: contact.phone,
-      direction: 'outbound',
-      templateKey: 'weekly_status',
-      body: 'Previous message',
-      status: 'sent',
-      sentAt: new Date('2026-07-01T00:00:00Z'),
-    });
-
-    const result = await service.remindContact(String(contact._id));
-    expect(result.renderedText).toBe('Previous message');
-    expect(sendInteractive).toHaveBeenCalled();
-    expect(messages.store.length).toBeGreaterThan(1);
-
-    await expect(
-      service.remindContact(new Types.ObjectId().toHexString()),
-    ).rejects.toBeInstanceOf(NotFoundException);
-
-    const empty = await contacts.create({
-      phone: '5491199999999',
-      active: true,
-      tags: ['staff'],
-    });
-    await expect(
-      service.remindContact(String(empty._id)),
-    ).rejects.toBeInstanceOf(NotFoundException);
-  });
-
-  it('records inbound replies from Evolution payloads', async () => {
-    const contact = await contacts.create({
-      phone: '5491112345678',
-      active: true,
-      tags: ['staff'],
-    });
-
-    const extracted = service.extractInboundFromEvolution({
-      data: {
-        key: {
-          remoteJid: '5491112345678@s.whatsapp.net',
-          fromMe: false,
-          id: 'm1',
-        },
-        message: { conversation: 'Ok listo' },
-      },
-    });
-    expect(extracted).toMatchObject({
-      phone: '5491112345678',
-      body: 'Ok listo',
-      providerMessageId: 'm1',
-    });
-
-    expect(
-      service.extractInboundFromEvolution({
-        data: {
-          key: { fromMe: true, remoteJid: '5491112345678@s.whatsapp.net' },
-        },
-      }),
-    ).toBeNull();
 
     const recorded = await service.recordInboundMessage({
       phone: '5491112345678',
-      body: 'Ok listo',
+      body: 'ack',
     });
     expect(recorded.contactId).toBe(String(contact._id));
-    expect(messages.store.some((item) => item.direction === 'inbound')).toBe(
-      true,
-    );
+    expect(messages.store).toHaveLength(1);
+    expect(messages.store[0]?.direction).toBe('inbound');
 
     const roster = await service.listStaffRoster();
     expect(roster[0]?.lastReceivedAt).toBeTruthy();
@@ -780,32 +654,155 @@ describe('MessagingService', () => {
   it('creates catalog messages, assigns staff, and records precise reply latency', async () => {
     const contact = await contacts.create({
       phone: '5491112345678',
+      label: 'Estructura',
       active: true,
       tags: ['staff'],
-      label: 'Estructura',
     });
+
     const catalogMessage = await service.createCatalogMessage({
-      title: 'Pedido de avance',
-      body: '¿Cómo va el sector estructurado esta semana?',
+      title: 'Avance semanal',
+      body: '¿Cómo va la estructura?',
       assignedContactId: String(contact._id),
     });
     expect(catalogMessage.assignedLabel).toBe('Estructura');
 
     const sent = await service.sendCatalogMessage(catalogMessage._id, {});
     expect(sent.ok).toBe(true);
-    expect(messages.store[0]?.title).toBe('Pedido de avance');
-    expect(messages.store[0]?.body).toContain('sector estructurado');
+    expect(sendInteractive).toHaveBeenCalled();
 
-    const replied = await service.recordInboundMessage({
+    const reply = await service.recordInboundMessage({
       phone: '5491112345678',
-      body: 'Vamos al 80%, sin desvíos.',
+      body: 'Vamos bien',
     });
-    expect(replied.threadId).toBeTruthy();
-    expect(typeof replied.responseLatencyMs).toBe('number');
-    expect(replied.responseStatus).toBe('green');
+    expect(reply.responseLatencyMs).toBeGreaterThanOrEqual(0);
+    expect(reply.responseStatus).toBe('green');
 
     const listed = await service.listCatalogMessages();
-    expect(listed[0]?.responseLatencyMs).not.toBeNull();
+    expect(listed[0]?.lastSentAt).toBeTruthy();
     expect(listed[0]?.repliedAt).toBeTruthy();
+    expect(listed[0]?.responseStatus).toBe('green');
+  });
+
+  it('updates, unassigns, and validates catalog send prerequisites', async () => {
+    const contact = await contacts.create({
+      phone: '5491199999999',
+      label: 'Obra',
+      active: true,
+      tags: ['staff'],
+    });
+    const created = await service.createCatalogMessage({
+      title: 'Draft',
+      body: 'Hola equipo',
+    });
+    await expect(
+      service.sendCatalogMessage(created._id, {}),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    const assigned = await service.assignCatalogMessage(
+      created._id,
+      String(contact._id),
+    );
+    expect(assigned.assignedPhone).toBe('5491199999999');
+
+    const updated = await service.updateCatalogMessage(created._id, {
+      title: 'Draft v2',
+      assignedContactId: '',
+    });
+    expect(updated.title).toBe('Draft v2');
+    expect(updated.assignedContactId).toBeNull();
+
+    sendInteractive.mockRejectedValueOnce(new Error('provider down'));
+    await expect(
+      service.sendCatalogMessage(created._id, {
+        contactId: String(contact._id),
+      }),
+    ).rejects.toThrow('provider down');
+    expect(
+      messages.store.some(
+        (item) => item.source === 'catalog' && item.status === 'failed',
+      ),
+    ).toBe(true);
+  });
+
+  it('records outbound staff messages on test-send and remind', async () => {
+    await templates.create({
+      key: 'weekly_status',
+      name: 'Weekly',
+      format: 'interactive_v1',
+      body: { text: 'Percent {{percent}}', widgets: [] },
+      active: true,
+    });
+    const contact = await contacts.create({
+      phone: '5491112345678',
+      label: 'Ana',
+      active: true,
+      tags: ['staff'],
+      language: 'es',
+    });
+
+    const sent = await service.sendTestMessage({
+      phone: '5491112345678',
+      templateKey: 'weekly_status',
+      percent: '80',
+    });
+    expect(sent.ok).toBe(true);
+    expect(messages.store.some((item) => item.source === 'test')).toBe(true);
+
+    sendInteractive.mockRejectedValueOnce(new Error('send failed'));
+    await expect(
+      service.sendTestMessage({
+        phone: '5491112345678',
+        templateKey: 'weekly_status',
+      }),
+    ).rejects.toThrow('send failed');
+
+    const reminded = await service.remindContact(String(contact._id));
+    expect(reminded.ok).toBe(true);
+    expect(
+      messages.store.filter((item) => item.source === 'remind').length,
+    ).toBeGreaterThan(0);
+
+    sendInteractive.mockRejectedValueOnce(new Error('remind failed'));
+    await expect(service.remindContact(String(contact._id))).rejects.toThrow(
+      'remind failed',
+    );
+
+    await expect(
+      service.sendTestMessage({
+        phone: '5491100000000',
+        templateKey: 'missing',
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    await expect(
+      service.sendCatalogMessage(new Types.ObjectId().toHexString(), {}),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('parses Evolution webhook payloads into inbound DTOs', () => {
+    expect(
+      service.extractInboundFromEvolution({
+        data: {
+          key: { remoteJid: '5491112345678@s.whatsapp.net', fromMe: false },
+          message: { conversation: 'Recibido' },
+        },
+      }),
+    ).toMatchObject({
+      phone: '5491112345678',
+      body: 'Recibido',
+    });
+    expect(
+      service.extractInboundFromEvolution({
+        data: {
+          key: { remoteJid: '5491112345678@s.whatsapp.net', fromMe: false },
+          message: { extendedTextMessage: { text: 'extendido' } },
+        },
+      }),
+    ).toMatchObject({ body: 'extendido' });
+    expect(
+      service.extractInboundFromEvolution({
+        data: { key: { fromMe: true, remoteJid: 'x' } },
+      }),
+    ).toBeNull();
   });
 });

@@ -95,9 +95,10 @@ describe('AccountService', () => {
     service = new AccountService(accounts as never);
   });
 
-  it('returns settings for an existing account', async () => {
+  it('returns settings including language for an existing account', async () => {
     accounts.findById.mockResolvedValue({
       email: 'person@example.com',
+      language: 'en',
       emailNotificationSchedule: {
         enabled: true,
         frequency: 'weekly',
@@ -111,6 +112,8 @@ describe('AccountService', () => {
     const result = await service.getSettings('507f1f77bcf86cd799439011');
 
     expect(result.email).toBe('person@example.com');
+    expect(result.language).toBe('en');
+    expect(result.languages).toEqual(['es', 'en']);
     expect(result.emailSchedule.enabled).toBe(true);
     expect(Array.isArray(result.nextSendDates)).toBe(true);
   });
@@ -122,12 +125,26 @@ describe('AccountService', () => {
     );
   });
 
-  it('updates the notification schedule', async () => {
+  it('updates language and notification schedule from the frontend', async () => {
+    accounts.findById.mockResolvedValue({
+      email: 'person@example.com',
+      language: 'es',
+      emailNotificationSchedule: {
+        enabled: false,
+        frequency: 'weekly',
+        daysOfWeek: [1],
+        dayOfMonth: 1,
+        sendTime: '09:00',
+        timezone: 'America/Argentina/Buenos_Aires',
+      },
+    });
     accounts.findByIdAndUpdate.mockResolvedValue({
       email: 'person@example.com',
+      language: 'en',
     });
 
-    const result = await service.updateSchedule('507f1f77bcf86cd799439011', {
+    const result = await service.updateSettings('507f1f77bcf86cd799439011', {
+      language: 'en',
       enabled: true,
       frequency: 'monthly',
       daysOfWeek: [1],
@@ -136,20 +153,17 @@ describe('AccountService', () => {
       timezone: 'UTC',
     });
 
+    expect(result.language).toBe('en');
     expect(result.emailSchedule.frequency).toBe('monthly');
     expect(result.emailSchedule.dayOfMonth).toBe(15);
     expect(accounts.findByIdAndUpdate).toHaveBeenCalled();
   });
 
-  it('rejects missing accounts when updating schedules', async () => {
-    accounts.findByIdAndUpdate.mockResolvedValue(null);
+  it('rejects missing accounts when updating settings', async () => {
+    accounts.findById.mockResolvedValue(null);
     await expect(
-      service.updateSchedule('507f1f77bcf86cd799439011', {
-        enabled: false,
-        frequency: 'weekly',
-        daysOfWeek: [1],
-        dayOfMonth: 1,
-        sendTime: '09:00',
+      service.updateSettings('507f1f77bcf86cd799439011', {
+        language: 'es',
       }),
     ).rejects.toBeInstanceOf(NotFoundException);
   });

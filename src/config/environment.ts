@@ -13,6 +13,7 @@ export interface Environment {
   REDIS_URL?: string;
   RESEND_API_KEY?: string;
   RESEND_FROM?: string;
+  WHATSAPP_DEFAULT_LANGUAGE?: string;
   WHATSAPP_TIMEZONE?: string;
   WHATSAPP_WEEKLY_CRON?: string;
 }
@@ -147,4 +148,11 @@ export function getEvolutionConfig(
     baseUrl: baseUrl.replace(/\/$/, ''),
     instance,
   };
+}
+
+export function getWhatsAppDefaultLanguage(
+  environment: Environment = process.env,
+): 'es' | 'en' {
+  const value = environment.WHATSAPP_DEFAULT_LANGUAGE?.trim().toLowerCase();
+  return value === 'en' ? 'en' : 'es';
 }

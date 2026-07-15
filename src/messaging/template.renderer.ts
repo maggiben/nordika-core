@@ -1,13 +1,4 @@
-export interface TemplateVariables {
-  percent: string;
-  duration: string;
-  avance: string;
-  ciclo_inicio: string;
-  ciclo_fin: string;
-  week: string;
-  ciclo_name: string;
-  notes: string;
-}
+export type TemplateVariables = Record<string, string>;
 
 export function renderTemplateText(
   template: string,
@@ -15,10 +6,7 @@ export function renderTemplateText(
 ): string {
   return template.replace(
     /\{\{\s*([a-z_]+)\s*\}\}/gi,
-    (_match, key: string) => {
-      const value = variables[key as keyof TemplateVariables];
-      return value ?? '';
-    },
+    (_match, key: string) => variables[key] ?? '',
   );
 }
 

@@ -1,7 +1,7 @@
 import { DynamicModule, Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ScheduleModule } from '@nestjs/schedule';
-import { getEvolutionConfig } from '../config/environment';
+import { LocaleService } from '../i18n/locale.service';
 import { getMongoUri } from '../mongo/mongo.config';
 import { EvolutionClient } from './evolution.client';
 import { MessagingController } from './messaging.controller';
@@ -51,13 +51,10 @@ export class MessagingModule {
       ],
       controllers: [MessagingController, MessagingWebhookController],
       providers: [
+        LocaleService,
+        EvolutionClient,
         MessagingService,
         MessagingScheduler,
-        {
-          provide: EvolutionClient,
-          useFactory: (): EvolutionClient =>
-            new EvolutionClient(getEvolutionConfig()),
-        },
       ],
     };
   }

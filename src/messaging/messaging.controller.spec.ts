@@ -15,6 +15,11 @@ describe('MessagingController', () => {
   const listWorkStatuses = jest.fn();
   const listDispatches = jest.fn();
   const listStaffRoster = jest.fn();
+  const createCatalogMessage = jest.fn();
+  const listCatalogMessages = jest.fn();
+  const updateCatalogMessage = jest.fn();
+  const assignCatalogMessage = jest.fn();
+  const sendCatalogMessage = jest.fn();
   const sendTestMessage = jest.fn();
   const remindContact = jest.fn();
   const runWeeklyStatusDispatch = jest.fn();
@@ -33,6 +38,11 @@ describe('MessagingController', () => {
     listWorkStatuses,
     listDispatches,
     listStaffRoster,
+    createCatalogMessage,
+    listCatalogMessages,
+    updateCatalogMessage,
+    assignCatalogMessage,
+    sendCatalogMessage,
     sendTestMessage,
     remindContact,
     runWeeklyStatusDispatch,
@@ -58,7 +68,7 @@ describe('MessagingController', () => {
     });
   });
 
-  it('delegates ciclo, work-status, and dispatch routes', async () => {
+  it('delegates ciclo, work-status, roster, and dispatch routes', async () => {
     await controller.createCiclo({
       name: 'C1',
       ciclo_inicio: '2026-07-01',
@@ -75,17 +85,27 @@ describe('MessagingController', () => {
     await controller.listWorkStatuses('id');
     await controller.listDispatches('id');
     await controller.listStaffRoster();
+    await controller.createCatalogMessage({
+      title: 'Hola',
+      body: 'Mensaje',
+    });
+    await controller.listCatalogMessages();
+    await controller.updateCatalogMessage('id', { title: 'Nuevo' });
+    await controller.assignCatalogMessage('id', { contactId: 'c1' });
+    await controller.sendCatalogMessage('id', { contactId: 'c1' });
     await controller.testSend({
       phone: '5491112345678',
-      templateKey: 'weekly',
+      templateKey: 'weekly_status',
     });
     await controller.remind({ contactId: 'id' });
     await controller.runWeeklyDispatch();
 
     expect(runWeeklyStatusDispatch).toHaveBeenCalled();
+    expect(upsertWorkStatus).toHaveBeenCalled();
     expect(listStaffRoster).toHaveBeenCalled();
+    expect(createCatalogMessage).toHaveBeenCalled();
+    expect(sendCatalogMessage).toHaveBeenCalledWith('id', { contactId: 'c1' });
     expect(sendTestMessage).toHaveBeenCalled();
     expect(remindContact).toHaveBeenCalledWith('id');
-    expect(upsertWorkStatus).toHaveBeenCalled();
   });
 });
