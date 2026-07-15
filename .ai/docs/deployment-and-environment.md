@@ -42,4 +42,4 @@ shared throttling store before horizontally scaling the service.
 - `pnpm run start` and `pnpm run start:prod` run `node dist/main`; Railpack can safely use its detected `start` command.
 
 ## Not configured
-The repository has no Dockerfile, Compose configuration, cloud manifest, CI pipeline, environment example, readiness/liveness endpoint, logging policy, or deployment-specific process configuration. The README deployment section is Nest starter text and is not evidence of an adopted platform.
+The repository has no Dockerfile, Compose configuration, cloud manifest, CI pipeline, readiness/liveness endpoint, logging policy, or deployment-specific process configuration. Local env is documented in `.env.example`; Railway is the adopted deploy target — see the root `README.md`.
