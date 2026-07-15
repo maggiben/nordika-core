@@ -49,6 +49,7 @@ import {
   computeResponseLatencyMs,
   responseStatusFromLatencyMs,
   responseStatusWhileWaiting,
+  type StaffResponseTrafficLight,
 } from './staff-response-metrics';
 import {
   computeWeekNumber,
@@ -674,7 +675,7 @@ export class MessagingService {
     });
 
     let responseLatencyMs: number | null = null;
-    let responseStatus: string | null = null;
+    let responseStatus: StaffResponseTrafficLight | null = null;
     let threadId: Types.ObjectId | null = null;
 
     if (openThread?.sentAt) {
