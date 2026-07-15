@@ -18,6 +18,7 @@ jest.mock('resend', () => ({
 
 import {
   BadRequestException,
+  ConflictException,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -810,12 +811,54 @@ describe('MessagingService', () => {
       title: 'Avance',
       body: 'Hola',
       assignedContactId: contact._id,
+      sortOrder: 1,
       active: true,
     });
     sendInteractive.mockRejectedValueOnce(new Error('boom'));
     const result = await service.sendAssignedCatalogMessages();
     expect(result.failed).toBe(1);
     expect(result.sent).toBe(0);
+  });
+
+  it('sendAssignedCatalogMessages sends only the next step per lead', async () => {
+    const contact = await contacts.create({
+      phone: '5491333333333',
+      label: 'Capataz',
+      active: true,
+      tags: ['staff'],
+    });
+    const first = await service.createCatalogMessage({
+      title: 'Uno',
+      body: 'Primero',
+      assignedContactId: String(contact._id),
+    });
+    await service.createCatalogMessage({
+      title: 'Dos',
+      body: 'Segundo',
+      assignedContactId: String(contact._id),
+    });
+
+    const batch = await service.sendAssignedCatalogMessages();
+    expect(batch.sent).toBe(1);
+    expect(batch.failed).toBe(0);
+    expect(sendInteractive).toHaveBeenCalledTimes(1);
+
+    await expect(
+      service.sendCatalogMessage(first._id, {
+        contactId: String(contact._id),
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    const secondId = (await service.listCatalogMessages()).find(
+      (row) =>
+        row.title === 'Dos' && row.assignedContactId === String(contact._id),
+    )?._id;
+    expect(secondId).toBeTruthy();
+    await expect(
+      service.sendCatalogMessage(secondId!, {
+        contactId: String(contact._id),
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 
   it('ignores ciclos outside the date window', async () => {

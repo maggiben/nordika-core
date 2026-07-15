@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -853,6 +854,23 @@ export class MessagingService {
       throw new NotFoundException('Contact not found.');
     }
 
+    const sequence = await this.resolveNextCatalogSend(contact._id);
+    if (sequence.awaitingReply) {
+      throw new ConflictException(
+        'Wait for the current catalog message to be answered before sending the next one.',
+      );
+    }
+    if (catalogMessage.assignedContactId) {
+      if (
+        !sequence.next ||
+        String(sequence.next._id) !== String(catalogMessage._id)
+      ) {
+        throw new ConflictException(
+          'Wait for the current catalog message to be answered before sending the next one.',
+        );
+      }
+    }
+
     const sentAt = new Date();
     const siblings = catalogMessage.assignedContactId
       ? await this.catalog
@@ -1154,7 +1172,7 @@ export class MessagingService {
   /**
    * Minute job entry: claim due account schedule slots, then:
    * 1) email digest to the account
-   * 2) WhatsApp re-send of every active assigned catalog message (“Mensajes del equipo”)
+   * 2) WhatsApp: at most one next catalog step per assigned lead (await reply before next)
    * 3) WhatsApp weekly ciclo status (if configured)
    */
   async runScheduledNotifications(asOf: Date = new Date()): Promise<{
@@ -1247,7 +1265,10 @@ export class MessagingService {
     };
   }
 
-  /** Re-send every active catalog message that has an assigned staff contact. */
+  /**
+   * Per assigned lead, send only the next catalog step that is allowed
+   * (never while a prior step awaits a reply).
+   */
   async sendAssignedCatalogMessages(): Promise<{
     sent: number;
     failed: number;
@@ -1264,24 +1285,40 @@ export class MessagingService {
       })
       .exec();
 
+    const byContact = new Map<string, StaffCatalogMessageDocument[]>();
+    for (const item of items) {
+      if (!item.assignedContactId) {
+        continue;
+      }
+      const key = String(item.assignedContactId);
+      const group = byContact.get(key) ?? [];
+      group.push(item);
+      byContact.set(key, group);
+    }
+
     let sent = 0;
     let failed = 0;
     let skipped = 0;
 
-    for (const item of items) {
-      if (!item.assignedContactId) {
-        skipped += 1;
+    for (const [contactId, group] of byContact) {
+      const sequence = await this.resolveNextCatalogSend(
+        this.toObjectId(contactId, 'contact'),
+      );
+      if (!sequence.next || sequence.awaitingReply) {
+        skipped += group.length;
         continue;
       }
       try {
-        await this.sendCatalogMessage(String(item._id), {
-          contactId: String(item.assignedContactId),
+        await this.sendCatalogMessage(String(sequence.next._id), {
+          contactId,
         });
         sent += 1;
+        skipped += Math.max(0, group.length - 1);
       } catch (error) {
         failed += 1;
+        skipped += Math.max(0, group.length - 1);
         this.logger.warn(
-          `Scheduled catalog send failed for ${String(item._id)}: ${
+          `Scheduled catalog send failed for ${String(sequence.next._id)}: ${
             error instanceof Error ? error.message : 'unknown error'
           }`,
         );
@@ -1788,33 +1825,76 @@ export class MessagingService {
   private async advanceCatalogAfterReply(
     openThread: StaffMessageDocument,
   ): Promise<void> {
-    if (!openThread.catalogMessageId) {
+    if (!openThread.catalogMessageId || !openThread.contactId) {
       return;
     }
-    const current = await this.catalog
-      .findById(openThread.catalogMessageId)
-      .exec();
-    if (!current?.assignedContactId || !current.active) {
+    // Do not restart the cycle on the last reply; only schedule may start a new lap.
+    const sequence = await this.resolveNextCatalogSend(openThread.contactId, {
+      allowRestart: false,
+    });
+    if (!sequence.next?.assignedContactId || sequence.awaitingReply) {
       return;
     }
-    const nextOrder = (current.sortOrder ?? 0) + 1;
-    if (nextOrder < 2) {
-      return;
-    }
-    const next = (
+    await this.sendCatalogMessage(String(sequence.next._id), {
+      contactId: String(sequence.next.assignedContactId),
+    });
+  }
+
+  /**
+   * Next catalog WhatsApp for a lead:
+   * - first never-sent step by sortOrder, or
+   * - awaitingReply while a step is unanswered, or
+   * - first step again after every step has been answered (when allowRestart).
+   */
+  private async resolveNextCatalogSend(
+    contactId: Types.ObjectId,
+    options: { allowRestart?: boolean } = {},
+  ): Promise<{
+    next: StaffCatalogMessageDocument | null;
+    awaitingReply: boolean;
+  }> {
+    const allowRestart = options.allowRestart !== false;
+    const items = (
       await this.catalog
         .find({
           active: true,
-          assignedContactId: current.assignedContactId,
+          assignedContactId: contactId,
         })
         .exec()
-    ).find((item) => (item.sortOrder ?? 0) === nextOrder);
-    if (!next) {
-      return;
+    ).sort(
+      (left, right) =>
+        (left.sortOrder ?? 0) - (right.sortOrder ?? 0) ||
+        String(left._id).localeCompare(String(right._id)),
+    );
+    if (items.length === 0) {
+      return { next: null, awaitingReply: false };
     }
-    await this.sendCatalogMessage(String(next._id), {
-      contactId: String(current.assignedContactId),
-    });
+
+    for (const item of items) {
+      const latest = await this.messages
+        .find({
+          contactId,
+          catalogMessageId: item._id,
+          direction: 'outbound',
+          source: 'catalog',
+          status: 'sent',
+        })
+        .sort({ sentAt: -1, createdAt: -1 })
+        .limit(1)
+        .exec();
+      const last = latest[0];
+      if (!last) {
+        return { next: item, awaitingReply: false };
+      }
+      if (!last.repliedAt) {
+        return { next: null, awaitingReply: true };
+      }
+    }
+
+    if (!allowRestart) {
+      return { next: null, awaitingReply: false };
+    }
+    return { next: items[0] ?? null, awaitingReply: false };
   }
 
   /** Match contacts even when WhatsApp JIDs omit/include country or mobile `9`. */
