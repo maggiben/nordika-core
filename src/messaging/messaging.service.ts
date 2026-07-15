@@ -13,6 +13,7 @@ import {
   isScheduleDueAt,
   normalizeSchedule,
   notificationSlotKey,
+  catalogSlotStartsAt,
 } from '../account/schedule';
 import { ACCOUNT_MODEL, AccountDocument } from '../auth/auth.schema';
 import { MESSAGING_CACHE_PATHS } from '../cache/cache.constants';
@@ -112,8 +113,6 @@ export interface StaffCatalogRow {
 export class MessagingService {
   private readonly logger = new Logger(MessagingService.name);
   private readonly replyMatchWindowMs = 7 * 24 * 60 * 60 * 1000;
-  /** Replies faster than this after send are treated as WhatsApp/Evolution ack noise. */
-  private readonly catalogMinReplyDelayMs = 15_000;
   private readonly catalogReminderMinIntervalMs = 60 * 60 * 1000;
   private readonly resend = new Resend(getAuthConfig().resendApiKey);
   private readonly resendFrom = getAuthConfig().resendFrom;
@@ -854,6 +853,7 @@ export class MessagingService {
   async sendCatalogMessage(
     id: string,
     dto: SendCatalogMessageDto = {},
+    options: { catalogSlotStart?: Date } = {},
   ): Promise<{
     ok: true;
     phone: string;
@@ -888,7 +888,10 @@ export class MessagingService {
       throw new NotFoundException('Contact not found.');
     }
 
-    const sequence = await this.resolveNextCatalogSend(contact._id);
+    const sequence = await this.resolveNextCatalogSend(contact._id, {
+      allowRestart: !options.catalogSlotStart,
+      slotStart: options.catalogSlotStart,
+    });
     // Allow re-sending the current open step (periodic reminder). Block only
     // when trying to send a different catalog message out of order.
     if (catalogMessage.assignedContactId) {
@@ -1117,8 +1120,7 @@ export class MessagingService {
   }> {
     const phone = this.normalizePhone(dto.phone);
     const rawBody = (dto.body ?? dto.text ?? '').trim();
-    const isMeaningfulReply =
-      rawBody.length > 0 && rawBody !== '(respuesta recibida)';
+    const isMeaningfulReply = this.isMeaningfulCatalogInboundBody(rawBody);
     const replyBody = isMeaningfulReply ? rawBody : '(respuesta recibida)';
     const repliedAt = new Date();
     const contact = await this.findContactByPhone(phone);
@@ -1134,11 +1136,13 @@ export class MessagingService {
       };
     }
 
+    const slotStart = contact.catalogSlotStartAt;
     const recentOutbound = await this.messages
       .find({
         contactId: contact._id,
         direction: 'outbound',
         status: 'sent',
+        ...(slotStart ? { sentAt: { $gte: slotStart } } : {}),
       })
       .sort({ sentAt: -1, createdAt: -1 })
       .limit(25)
@@ -1146,7 +1150,7 @@ export class MessagingService {
     const windowStart = repliedAt.getTime() - this.replyMatchWindowMs;
     const openCandidates: StaffMessageDocument[] = [];
     for (const item of recentOutbound) {
-      if (await this.isCatalogOutboundComplete(item)) {
+      if (await this.isCatalogOutboundComplete(item, slotStart ?? undefined)) {
         continue;
       }
       const sentAt =
@@ -1266,6 +1270,8 @@ export class MessagingService {
     let emailsSent = 0;
     let emailFailures = 0;
     let claimed = 0;
+    let catalogSlotKey: string | null = null;
+    let catalogSlotStart: Date | null = null;
     const roster = await this.listStaffRoster();
 
     for (const account of accounts) {
@@ -1294,6 +1300,10 @@ export class MessagingService {
       }
 
       claimed += 1;
+      if (!catalogSlotKey) {
+        catalogSlotKey = slot;
+        catalogSlotStart = catalogSlotStartsAt(schedule, asOf);
+      }
       try {
         await this.sendFollowUpEmail(account.email, roster, schedule.frequency);
         emailsSent += 1;
@@ -1313,7 +1323,12 @@ export class MessagingService {
     let whatsappSummaries: WeeklyDispatchSummary[] = [];
 
     if (claimed > 0 && this.evolution.isConfigured()) {
-      const catalogResult = await this.sendAssignedCatalogMessages();
+      if (catalogSlotKey && catalogSlotStart) {
+        await this.syncCatalogDispatchSlot(catalogSlotKey, catalogSlotStart);
+      }
+      const catalogResult = await this.sendAssignedCatalogMessages({
+        slotStart: catalogSlotStart ?? undefined,
+      });
       catalogSent = catalogResult.sent;
       catalogFailed = catalogResult.failed;
 
@@ -1344,7 +1359,11 @@ export class MessagingService {
    * Per assigned lead, send only the next catalog step that is allowed
    * (never while a prior step awaits a reply).
    */
-  async sendAssignedCatalogMessages(): Promise<{
+  async sendAssignedCatalogMessages(
+    options: {
+      slotStart?: Date;
+    } = {},
+  ): Promise<{
     sent: number;
     failed: number;
     skipped: number;
@@ -1378,6 +1397,10 @@ export class MessagingService {
     for (const [contactId, group] of byContact) {
       const sequence = await this.resolveNextCatalogSend(
         this.toObjectId(contactId, 'contact'),
+        {
+          allowRestart: !options.slotStart,
+          slotStart: options.slotStart,
+        },
       );
       // `awaitingReply` still carries `next` = the open step to remind.
       if (!sequence.next) {
@@ -1385,14 +1408,18 @@ export class MessagingService {
         continue;
       }
       if (sequence.awaitingReply) {
+        const recentFilter: Record<string, unknown> = {
+          contactId: this.toObjectId(contactId, 'contact'),
+          catalogMessageId: sequence.next._id,
+          direction: 'outbound',
+          source: 'catalog',
+          status: 'sent',
+        };
+        if (options.slotStart) {
+          recentFilter.sentAt = { $gte: options.slotStart };
+        }
         const recent = await this.messages
-          .find({
-            contactId: this.toObjectId(contactId, 'contact'),
-            catalogMessageId: sequence.next._id,
-            direction: 'outbound',
-            source: 'catalog',
-            status: 'sent',
-          })
+          .find(recentFilter)
           .sort({ sentAt: -1, createdAt: -1 })
           .exec();
         const lastSentAt = recent[0]?.sentAt;
@@ -1406,9 +1433,11 @@ export class MessagingService {
         }
       }
       try {
-        await this.sendCatalogMessage(String(sequence.next._id), {
-          contactId,
-        });
+        await this.sendCatalogMessage(
+          String(sequence.next._id),
+          { contactId },
+          { catalogSlotStart: options.slotStart },
+        );
         sent += 1;
         skipped += Math.max(0, group.length - 1);
       } catch (error) {
@@ -1981,45 +2010,29 @@ export class MessagingService {
     if (!current?.assignedContactId || !current.active) {
       return;
     }
-    const nextOrder = (current.sortOrder ?? 0) + 1;
-    if (nextOrder < 2) {
-      return;
-    }
-    const next = (
-      await this.catalog
-        .find({
-          active: true,
-          assignedContactId: current.assignedContactId,
-        })
-        .exec()
-    ).find((item) => (item.sortOrder ?? 0) === nextOrder);
-    if (!next) {
+
+    const lead = await this.contacts.findById(current.assignedContactId).exec();
+    if (!lead?.active) {
       return;
     }
 
-    // If this next step was already blasted unreplied, do not re-send it —
-    // the operator already has it. Only send when it was never delivered.
-    const latestNext = await this.messages
-      .find({
-        contactId: current.assignedContactId,
-        catalogMessageId: next._id,
-        direction: 'outbound',
-        source: 'catalog',
-        status: 'sent',
-      })
-      .sort({ sentAt: -1, createdAt: -1 })
-      .limit(1)
-      .exec();
-    if (
-      latestNext[0] &&
-      !(await this.isCatalogOutboundComplete(latestNext[0]))
-    ) {
-      return;
-    }
-
-    await this.sendCatalogMessage(String(next._id), {
-      contactId: String(current.assignedContactId),
+    const slotStart = lead.catalogSlotStartAt ?? undefined;
+    const sequence = await this.resolveNextCatalogSend(lead._id, {
+      allowRestart: false,
+      slotStart,
     });
+    if (!sequence.next || sequence.awaitingReply) {
+      return;
+    }
+    if (String(sequence.next._id) === String(current._id)) {
+      return;
+    }
+
+    await this.sendCatalogMessage(
+      String(sequence.next._id),
+      { contactId: String(lead._id) },
+      { catalogSlotStart: slotStart },
+    );
   }
 
   /**
@@ -2027,6 +2040,50 @@ export class MessagingService {
    * was stored as a matching inbound row. Outbound-only repliedAt stamps from
    * ack/status webhooks used to skip step 1 and jump straight to step 2.
    */
+  /**
+   * Stamp the active catalog cycle on every lead with assigned messages so
+   * replies from prior slots/dates no longer advance the sequence.
+   */
+  private async syncCatalogDispatchSlot(
+    slotKey: string,
+    slotStart: Date,
+  ): Promise<void> {
+    const assigned = await this.catalog
+      .find({
+        active: true,
+        assignedContactId: { $exists: true, $ne: null },
+      })
+      .exec();
+    const contactIds = new Set(
+      assigned
+        .map((item) =>
+          item.assignedContactId ? String(item.assignedContactId) : null,
+        )
+        .filter((id): id is string => Boolean(id)),
+    );
+    for (const contactId of contactIds) {
+      const contactOid = this.toObjectId(contactId, 'contact');
+      const contact = await this.contacts.findById(contactOid).exec();
+      if (!contact) {
+        continue;
+      }
+      if (contact.catalogSlotKey === slotKey) {
+        continue;
+      }
+      if (contact.catalogSlotKey) {
+        this.logger.log(
+          `Catalog cycle ${slotKey} for ${contact.phone} (was ${contact.catalogSlotKey})`,
+        );
+      }
+      await this.contacts
+        .findByIdAndUpdate(contactOid, {
+          catalogSlotKey: slotKey,
+          catalogSlotStartAt: slotStart,
+        })
+        .exec();
+    }
+  }
+
   private isMeaningfulCatalogInboundBody(body: string): boolean {
     const trimmed = body.trim();
     if (!trimmed || trimmed === '(respuesta recibida)') {
@@ -2045,6 +2102,7 @@ export class MessagingService {
 
   private async isCatalogOutboundComplete(
     message: StaffMessageDocument,
+    slotStart?: Date,
   ): Promise<boolean> {
     if (!message.repliedAt) {
       return false;
@@ -2067,14 +2125,19 @@ export class MessagingService {
     if (!sentAt) {
       return false;
     }
+    if (slotStart && sentAt.getTime() < slotStart.getTime()) {
+      return false;
+    }
 
+    const inboundSince =
+      slotStart && slotStart.getTime() > sentAt.getTime() ? slotStart : sentAt;
     const inbound = await this.messages
       .findOne({
         contactId: message.contactId,
         direction: 'inbound',
         status: 'received',
         catalogMessageId: message.catalogMessageId,
-        receivedAt: { $gte: sentAt },
+        receivedAt: { $gte: inboundSince },
       })
       .sort({ receivedAt: -1 })
       .exec();
@@ -2082,18 +2145,7 @@ export class MessagingService {
       return false;
     }
     const inboundBody = (inbound.body ?? '').trim();
-    if (!this.isMeaningfulCatalogInboundBody(inboundBody)) {
-      return false;
-    }
-    const receivedAt =
-      inbound.receivedAt ??
-      (inbound as StaffMessageDocument & { createdAt?: Date }).createdAt;
-    if (!receivedAt) {
-      return false;
-    }
-    return (
-      receivedAt.getTime() - sentAt.getTime() >= this.catalogMinReplyDelayMs
-    );
+    return this.isMeaningfulCatalogInboundBody(inboundBody);
   }
 
   /**
@@ -2128,12 +2180,13 @@ export class MessagingService {
    */
   private async resolveNextCatalogSend(
     contactId: Types.ObjectId,
-    options: { allowRestart?: boolean } = {},
+    options: { allowRestart?: boolean; slotStart?: Date } = {},
   ): Promise<{
     next: StaffCatalogMessageDocument | null;
     awaitingReply: boolean;
   }> {
     const allowRestart = options.allowRestart !== false;
+    const slotStart = options.slotStart;
     const items = (
       await this.catalog
         .find({
@@ -2151,14 +2204,18 @@ export class MessagingService {
     }
 
     for (const item of items) {
+      const outboundFilter: Record<string, unknown> = {
+        contactId,
+        catalogMessageId: item._id,
+        direction: 'outbound',
+        source: 'catalog',
+        status: 'sent',
+      };
+      if (slotStart) {
+        outboundFilter.sentAt = { $gte: slotStart };
+      }
       const latest = await this.messages
-        .find({
-          contactId,
-          catalogMessageId: item._id,
-          direction: 'outbound',
-          source: 'catalog',
-          status: 'sent',
-        })
+        .find(outboundFilter)
         .sort({ sentAt: -1, createdAt: -1 })
         .limit(1)
         .exec();
@@ -2166,7 +2223,7 @@ export class MessagingService {
       if (!last) {
         return { next: item, awaitingReply: false };
       }
-      if (!(await this.isCatalogOutboundComplete(last))) {
+      if (!(await this.isCatalogOutboundComplete(last, slotStart))) {
         await this.reopenInvalidCatalogClose(last);
         // Keep reminding this step; do not advance to later flooded steps.
         this.logger.log(

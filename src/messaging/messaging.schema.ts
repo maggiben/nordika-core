@@ -35,6 +35,9 @@ export interface WhatsAppContact {
   language?: string;
   active: boolean;
   tags: string[];
+  /** Active catalog notification slot; replies before this cycle are ignored. */
+  catalogSlotKey?: string;
+  catalogSlotStartAt?: Date;
 }
 
 export interface MessageTemplate {
@@ -140,6 +143,8 @@ export const whatsAppContactSchema = new Schema<WhatsAppContact>(
     },
     active: { type: Boolean, required: true, default: true },
     tags: { type: [String], required: true, default: [] },
+    catalogSlotKey: { type: String },
+    catalogSlotStartAt: { type: Date },
   },
   { timestamps: true },
 );

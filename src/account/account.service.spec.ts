@@ -6,6 +6,7 @@ import {
   normalizeSchedule,
   notificationSlotKey,
 } from './account.service';
+import { catalogSlotStartsAt } from './schedule';
 
 describe('account schedule helpers', () => {
   it('normalizes missing and invalid schedule values', () => {
@@ -144,6 +145,23 @@ describe('account schedule helpers', () => {
     expect(isScheduleDueAt(schedule, later)).toBe(false);
     expect(notificationSlotKey(schedule, due)).toBe(
       '2026-07-15T09:00|America/Argentina/Buenos_Aires|weekly',
+    );
+    expect(catalogSlotStartsAt(schedule, due).toISOString()).toBe(
+      '2026-07-15T12:00:00.000Z',
+    );
+    expect(
+      notificationSlotKey({ ...schedule, sendTime: '10:00' }, due),
+    ).not.toBe(notificationSlotKey(schedule, due));
+    const monthly = {
+      enabled: true,
+      frequency: 'monthly' as const,
+      daysOfWeek: [1],
+      dayOfMonth: 15,
+      sendTime: '09:00',
+      timezone: 'America/Argentina/Buenos_Aires',
+    };
+    expect(catalogSlotStartsAt(monthly, due).toISOString()).toBe(
+      '2026-07-15T12:00:00.000Z',
     );
     expect(
       isScheduleDueAt(

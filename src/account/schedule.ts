@@ -261,3 +261,21 @@ export function notificationSlotKey(
   const date = `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
   return `${date}T${schedule.sendTime}|${timeZone}|${schedule.frequency}`;
 }
+
+/** UTC instant when the current notification slot begins (local send time on `from`'s date). */
+export function catalogSlotStartsAt(
+  schedule: EmailNotificationSchedule,
+  from = new Date(),
+): Date {
+  const timeZone = schedule.timezone || DEFAULT_SCHEDULE.timezone;
+  const parts = readZonedParts(from, timeZone);
+  const [hours, minutes] = schedule.sendTime.split(':').map(Number);
+  return zonedLocalToUtc(
+    parts.year,
+    parts.month,
+    parts.day,
+    hours,
+    minutes,
+    timeZone,
+  );
+}

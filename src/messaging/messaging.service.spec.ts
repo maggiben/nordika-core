@@ -260,6 +260,8 @@ describe('MessagingService', () => {
     active: boolean;
     tags: string[];
     language?: string;
+    catalogSlotKey?: string;
+    catalogSlotStartAt?: Date;
   }>();
   const templates = createModelMock<{
     key: string;
@@ -795,6 +797,327 @@ describe('MessagingService', () => {
     expect(second.catalogSent).toBe(0);
   });
 
+  it('restarts catalog at step 1 when a new notification slot begins', async () => {
+    const schedule = {
+      enabled: true,
+      frequency: 'weekly' as const,
+      daysOfWeek: [3, 4],
+      dayOfMonth: 1,
+      sendTime: '09:00',
+      timezone: 'America/Argentina/Buenos_Aires',
+    };
+    const wednesday = new Date('2026-07-15T12:00:00.000Z');
+    const thursday = new Date('2026-07-16T12:00:00.000Z');
+    await accounts.create({
+      email: 'ops@example.com',
+      emailNotificationSchedule: schedule,
+    });
+    const lead = await contacts.create({
+      phone: '5491138911794',
+      label: 'Benjamin',
+      active: true,
+      tags: ['staff'],
+    });
+    const first = await service.createCatalogMessage({
+      title: 'Performance del equipo',
+      body: 'Performance',
+      assignedContactId: String(lead._id),
+    });
+    await service.createCatalogMessage({
+      title: 'Asistencia del equipo',
+      body: 'Asistencia',
+      assignedContactId: String(lead._id),
+    });
+
+    await service.runScheduledNotifications(wednesday);
+    expect(sendInteractive).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        sendInteractive.mock.calls[0] as unknown as [string, { title?: string }]
+      )[1].title,
+    ).toBe('1/2 · Performance del equipo');
+    expect(
+      contacts.store.find((row) => String(row._id) === String(lead._id))
+        ?.catalogSlotKey,
+    ).toBe('2026-07-15T09:00|America/Argentina/Buenos_Aires|weekly');
+
+    backdateCatalogOutbound(messages.store, first._id);
+    await service.recordInboundMessage({
+      phone: lead.phone,
+      body: 'todo bien hoy',
+    });
+    expect(sendInteractive).toHaveBeenCalledTimes(2);
+    expect(
+      (
+        sendInteractive.mock.calls[1] as unknown as [string, { title?: string }]
+      )[1].title,
+    ).toBe('2/2 · Asistencia del equipo');
+
+    sendInteractive.mockClear();
+    await service.runScheduledNotifications(thursday);
+    expect(sendInteractive).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        sendInteractive.mock.calls[0] as unknown as [string, { title?: string }]
+      )[1].title,
+    ).toBe('1/2 · Performance del equipo');
+    const stamped = contacts.store.find(
+      (row) => String(row._id) === String(lead._id),
+    );
+    expect(stamped?.catalogSlotKey).toBe(
+      '2026-07-16T09:00|America/Argentina/Buenos_Aires|weekly',
+    );
+  });
+
+  it('ignores catalog replies from before the active notification slot', async () => {
+    const lead = await contacts.create({
+      phone: '5491122334455',
+      label: 'Lead',
+      active: true,
+      tags: ['staff'],
+      catalogSlotKey: '2026-07-16T09:00|America/Argentina/Buenos_Aires|weekly',
+      catalogSlotStartAt: new Date('2026-07-16T12:00:00.000Z'),
+    });
+    const first = await service.createCatalogMessage({
+      title: 'Uno',
+      body: 'Primero',
+      assignedContactId: String(lead._id),
+    });
+    await service.createCatalogMessage({
+      title: 'Dos',
+      body: 'Segundo',
+      assignedContactId: String(lead._id),
+    });
+    const yesterday = new Date('2026-07-15T12:00:00.000Z');
+    messages.store.push({
+      _id: new Types.ObjectId(),
+      contactId: lead._id,
+      phone: lead.phone,
+      direction: 'outbound',
+      body: first.body,
+      status: 'sent',
+      source: 'catalog',
+      catalogMessageId: new Types.ObjectId(first._id),
+      sentAt: yesterday,
+      repliedAt: new Date('2026-07-15T12:05:00.000Z'),
+      replyBody: 'respondido ayer',
+      title: '1/2 · Uno',
+      responseStatus: 'green',
+      save: () => Promise.resolve(null as never),
+    });
+    messages.store.push({
+      _id: new Types.ObjectId(),
+      contactId: lead._id,
+      phone: lead.phone,
+      direction: 'inbound',
+      body: 'respondido ayer',
+      status: 'received',
+      source: 'webhook',
+      catalogMessageId: new Types.ObjectId(first._id),
+      receivedAt: new Date('2026-07-15T12:05:00.000Z'),
+      save: () => Promise.resolve(null as never),
+    });
+
+    const batch = await service.sendAssignedCatalogMessages({
+      slotStart: lead.catalogSlotStartAt,
+    });
+    expect(batch.sent).toBe(1);
+    expect(
+      (
+        sendInteractive.mock.calls.at(-1) as unknown as [
+          string,
+          { title?: string },
+        ]
+      )[1].title,
+    ).toBe('1/2 · Uno');
+  });
+
+  it('skips re-stamping contacts when the scheduler reclaims the same catalog slot', async () => {
+    const schedule = {
+      enabled: true,
+      frequency: 'weekly' as const,
+      daysOfWeek: [3],
+      dayOfMonth: 1,
+      sendTime: '09:00',
+      timezone: 'America/Argentina/Buenos_Aires',
+    };
+    const wednesday = new Date('2026-07-15T12:00:00.000Z');
+    const account = await accounts.create({
+      email: 'ops@example.com',
+      emailNotificationSchedule: schedule,
+    });
+    const lead = await contacts.create({
+      phone: '5491138911794',
+      label: 'Benjamin',
+      active: true,
+      tags: ['staff'],
+    });
+    await service.createCatalogMessage({
+      title: 'Performance del equipo',
+      body: 'Performance',
+      assignedContactId: String(lead._id),
+    });
+
+    await service.runScheduledNotifications(wednesday);
+    const stamped = contacts.store.find(
+      (row) => String(row._id) === String(lead._id),
+    );
+    const slotStartBefore = stamped?.catalogSlotStartAt;
+    expect(stamped?.catalogSlotKey).toBe(
+      '2026-07-15T09:00|America/Argentina/Buenos_Aires|weekly',
+    );
+
+    account.lastNotificationSlot = 'stale-slot';
+    sendInteractive.mockClear();
+    await service.runScheduledNotifications(wednesday);
+
+    const after = contacts.store.find(
+      (row) => String(row._id) === String(lead._id),
+    );
+    expect(after?.catalogSlotStartAt).toEqual(slotStartBefore);
+    expect(after?.catalogSlotKey).toBe(
+      '2026-07-15T09:00|America/Argentina/Buenos_Aires|weekly',
+    );
+  });
+
+  it('syncCatalogDispatchSlot ignores catalog rows assigned to deleted contacts', async () => {
+    const wednesday = new Date('2026-07-15T12:00:00.000Z');
+    await accounts.create({
+      email: 'ops@example.com',
+      emailNotificationSchedule: {
+        enabled: true,
+        frequency: 'weekly',
+        daysOfWeek: [3],
+        dayOfMonth: 1,
+        sendTime: '09:00',
+        timezone: 'America/Argentina/Buenos_Aires',
+      },
+    });
+    const lead = await contacts.create({
+      phone: '5491138911794',
+      label: 'Benjamin',
+      active: true,
+      tags: ['staff'],
+    });
+    await service.createCatalogMessage({
+      title: 'Performance del equipo',
+      body: 'Performance',
+      assignedContactId: String(lead._id),
+    });
+    await catalog.create({
+      title: 'Huérfano',
+      body: 'Sin contacto',
+      assignedContactId: new Types.ObjectId(),
+      active: true,
+    });
+
+    await service.runScheduledNotifications(wednesday);
+    expect(sendInteractive).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not treat a one-character catalog reply as complete', async () => {
+    const lead = await contacts.create({
+      phone: '5491122334455',
+      label: 'Lead',
+      active: true,
+      tags: ['staff'],
+    });
+    const first = await service.createCatalogMessage({
+      title: 'Uno',
+      body: 'Primero',
+      assignedContactId: String(lead._id),
+    });
+    await service.createCatalogMessage({
+      title: 'Dos',
+      body: 'Segundo',
+      assignedContactId: String(lead._id),
+    });
+    await service.sendCatalogMessage(String(first._id));
+    backdateCatalogOutbound(messages.store, first._id);
+    await service.recordInboundMessage({
+      phone: lead.phone,
+      body: 'k',
+    });
+
+    expect(sendInteractive).toHaveBeenCalledTimes(1);
+    sendInteractive.mockClear();
+    const batch = await service.sendAssignedCatalogMessages({});
+    expect(batch.sent).toBe(1);
+    expect(
+      (
+        sendInteractive.mock.calls[0] as unknown as [string, { title?: string }]
+      )[1].title,
+    ).toBe('1/2 · Uno');
+  });
+
+  it('restarts catalog at step 1 when slotStart moves to a later schedule', async () => {
+    const newSlotStart = new Date('2026-07-15T13:00:00.000Z');
+    const lead = await contacts.create({
+      phone: '5491138911794',
+      label: 'Benjamin',
+      active: true,
+      tags: ['staff'],
+      catalogSlotKey: '2026-07-15T10:00|America/Argentina/Buenos_Aires|weekly',
+      catalogSlotStartAt: newSlotStart,
+    });
+    const first = await service.createCatalogMessage({
+      title: 'Performance del equipo',
+      body: 'Performance',
+      assignedContactId: String(lead._id),
+    });
+    const second = await service.createCatalogMessage({
+      title: 'Asistencia del equipo',
+      body: 'Asistencia',
+      assignedContactId: String(lead._id),
+    });
+    const priorSentAt = new Date('2026-07-15T12:05:00.000Z');
+    const priorReplyAt = new Date('2026-07-15T12:06:00.000Z');
+    for (const [step, replyBody] of [
+      [first, 'todo bien hoy'],
+      [second, 'asistencia ok'],
+    ] as const) {
+      messages.store.push({
+        _id: new Types.ObjectId(),
+        contactId: lead._id,
+        phone: lead.phone,
+        direction: 'outbound',
+        body: step.body,
+        status: 'sent',
+        source: 'catalog',
+        catalogMessageId: new Types.ObjectId(step._id),
+        sentAt: priorSentAt,
+        repliedAt: priorReplyAt,
+        replyBody,
+        title: step.title,
+        responseStatus: 'green',
+        save: () => Promise.resolve(null as never),
+      });
+      messages.store.push({
+        _id: new Types.ObjectId(),
+        contactId: lead._id,
+        phone: lead.phone,
+        direction: 'inbound',
+        body: replyBody,
+        status: 'received',
+        source: 'webhook',
+        catalogMessageId: new Types.ObjectId(step._id),
+        receivedAt: priorReplyAt,
+        save: () => Promise.resolve(null as never),
+      });
+    }
+
+    sendInteractive.mockClear();
+    const batch = await service.sendAssignedCatalogMessages({
+      slotStart: newSlotStart,
+    });
+    expect(batch.sent).toBe(1);
+    expect(
+      (
+        sendInteractive.mock.calls[0] as unknown as [string, { title?: string }]
+      )[1].title,
+    ).toBe('1/2 · Performance del equipo');
+  });
+
   it('records email failures and skips WhatsApp when Evolution is off', async () => {
     const asOf = new Date('2026-07-15T12:00:00.000Z');
     await accounts.create({
@@ -1052,6 +1375,46 @@ describe('MessagingService', () => {
     expect(firstOutbound.repliedAt).toBeUndefined();
   });
 
+  it('advances to 2/2 immediately after a real reply without waiting for the scheduler', async () => {
+    const lead = await contacts.create({
+      phone: '5491138911794',
+      label: 'Benjamin',
+      active: true,
+      tags: ['staff'],
+    });
+    const first = await service.createCatalogMessage({
+      title: 'Performance del equipo',
+      body: 'Performance',
+      assignedContactId: String(lead._id),
+    });
+    await service.createCatalogMessage({
+      title: 'Asistencia del equipo',
+      body: 'Asistencia',
+      assignedContactId: String(lead._id),
+    });
+
+    await service.sendCatalogMessage(String(first._id));
+    expect(sendInteractive).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        sendInteractive.mock.calls[0] as unknown as [string, { title?: string }]
+      )[1].title,
+    ).toBe('1/2 · Performance del equipo');
+
+    // Real human replies often land within seconds — must still unlock step 2.
+    await service.recordInboundMessage({
+      phone: lead.phone,
+      body: 'todo bien hoy con el equipo',
+    });
+
+    expect(sendInteractive).toHaveBeenCalledTimes(2);
+    expect(
+      (
+        sendInteractive.mock.calls[1] as unknown as [string, { title?: string }]
+      )[1].title,
+    ).toBe('2/2 · Asistencia del equipo');
+  });
+
   it('does not treat instant Recibido acks as completing step 1', async () => {
     const lead = await contacts.create({
       phone: '5491999999999',
@@ -1147,6 +1510,10 @@ describe('MessagingService', () => {
 
     const reset = await service.resetCatalogSequence(String(lead._id));
     expect(reset).toEqual({ ok: true, reset: 1 });
+
+    await expect(
+      service.resetCatalogSequence(new Types.ObjectId().toHexString()),
+    ).rejects.toBeInstanceOf(NotFoundException);
 
     const batch = await service.sendAssignedCatalogMessages();
     expect(batch.sent).toBe(1);
@@ -1745,6 +2112,38 @@ describe('MessagingService', () => {
     expect(
       service.extractInboundFromEvolution({
         data: { key: { fromMe: true, remoteJid: 'x' } },
+      }),
+    ).toBeNull();
+    expect(
+      service.extractInboundFromEvolution({
+        data: {
+          key: { remoteJid: '5491112345678@s.whatsapp.net', fromMe: false },
+          message: { protocolMessage: { type: 0 } },
+        },
+      }),
+    ).toBeNull();
+    expect(
+      service.extractInboundFromEvolution({
+        data: {
+          key: { remoteJid: '5491112345678@s.whatsapp.net', fromMe: false },
+          message: { reactionMessage: { text: '👍' } },
+        },
+      }),
+    ).toBeNull();
+    expect(
+      service.extractInboundFromEvolution({
+        data: {
+          key: { remoteJid: '5491112345678@s.whatsapp.net', fromMe: false },
+          message: { messageStubType: 1 },
+        },
+      }),
+    ).toBeNull();
+    expect(
+      service.extractInboundFromEvolution({
+        data: {
+          key: { remoteJid: '5491112345678@s.whatsapp.net', fromMe: false },
+          message: { senderKeyDistributionMessage: {} },
+        },
       }),
     ).toBeNull();
   });
