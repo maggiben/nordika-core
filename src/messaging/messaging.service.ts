@@ -92,6 +92,7 @@ export interface StaffRosterRow {
   label?: string;
   active: boolean;
   tags: string[];
+  projectId?: string | null;
   lastSentAt: string | null;
   lastReceivedAt: string | null;
   lastTemplateKey: string | null;
@@ -178,6 +179,7 @@ export class MessagingService {
       language: normalizeLanguage(dto.language, getWhatsAppDefaultLanguage()),
       active: dto.active ?? true,
       tags: dto.tags ?? ['staff'],
+      ...(dto.projectId?.trim() ? { projectId: dto.projectId.trim() } : {}),
     });
     await this.cache.invalidatePaths([
       MESSAGING_CACHE_PATHS.contacts,
@@ -555,6 +557,7 @@ export class MessagingService {
         label: contact.label,
         active: contact.active,
         tags: contact.tags ?? [],
+        projectId: contact.projectId?.trim() || null,
         lastSentAt: lastOutbound?.sentAt
           ? lastOutbound.sentAt.toISOString()
           : null,
@@ -987,6 +990,9 @@ export class MessagingService {
         receivedAt: sentAt,
         responseStatus: 'pending',
         source: 'catalog',
+        ...(contact.projectId?.trim()
+          ? { projectId: contact.projectId.trim() }
+          : {}),
       });
       if (!catalogMessage.assignedContactId) {
         catalogMessage.assignedContactId = contact._id;
@@ -1021,6 +1027,9 @@ export class MessagingService {
         sentAt,
         source: 'catalog',
         responseStatus: 'neutral',
+        ...(contact.projectId?.trim()
+          ? { projectId: contact.projectId.trim() }
+          : {}),
       });
       throw error;
     }
@@ -1221,6 +1230,8 @@ export class MessagingService {
       }
     }
 
+    const inboundProjectId =
+      openThread?.projectId?.trim() || contact.projectId?.trim() || undefined;
     await this.recordStaffMessage({
       contactId: contact._id,
       phone: contact.phone,
@@ -1239,6 +1250,7 @@ export class MessagingService {
       sourceId: openThread?.sourceId,
       slotKey: openThread?.slotKey,
       title: openThread?.title,
+      projectId: inboundProjectId,
       responseLatencyMs: responseLatencyMs ?? undefined,
       responseStatus: responseStatus ?? undefined,
     });
@@ -1316,6 +1328,7 @@ export class MessagingService {
     let claimed = 0;
     let catalogSlotKey: string | null = null;
     let catalogSlotStart: Date | null = null;
+    const activeProjectIds = new Set<string>();
     const roster = await this.listStaffRoster();
 
     for (const account of accounts) {
@@ -1344,6 +1357,10 @@ export class MessagingService {
       }
 
       claimed += 1;
+      const projectId = claimedAccount.activeProjectId?.trim();
+      if (projectId) {
+        activeProjectIds.add(projectId);
+      }
       if (!catalogSlotKey) {
         catalogSlotKey = slot;
         catalogSlotStart = catalogSlotStartsAt(schedule, asOf);
@@ -1365,19 +1382,25 @@ export class MessagingService {
     let catalogFailed = 0;
     let whatsappTriggered = false;
     let whatsappSummaries: WeeklyDispatchSummary[] = [];
+    const projectIds = [...activeProjectIds];
 
     if (claimed > 0 && this.evolution.isConfigured()) {
       if (catalogSlotKey && catalogSlotStart) {
-        await this.syncCatalogDispatchSlot(catalogSlotKey, catalogSlotStart);
+        await this.syncCatalogDispatchSlot(
+          catalogSlotKey,
+          catalogSlotStart,
+          projectIds,
+        );
       }
       const catalogResult = await this.sendAssignedCatalogMessages({
         slotStart: catalogSlotStart ?? undefined,
+        projectIds,
       });
       catalogSent = catalogResult.sent;
       catalogFailed = catalogResult.failed;
 
       if (catalogSlotKey) {
-        await this.kickoffTaskChecklists(catalogSlotKey);
+        await this.kickoffTaskChecklists(catalogSlotKey, projectIds);
       }
 
       try {
@@ -1410,6 +1433,8 @@ export class MessagingService {
   async sendAssignedCatalogMessages(
     options: {
       slotStart?: Date;
+      /** When set, only contacts belonging to these obras are messaged. */
+      projectIds?: string[];
     } = {},
   ): Promise<{
     sent: number;
@@ -1417,6 +1442,18 @@ export class MessagingService {
     skipped: number;
   }> {
     if (!this.evolution.isConfigured()) {
+      return { sent: 0, failed: 0, skipped: 0 };
+    }
+
+    const projectFilter =
+      options.projectIds !== undefined
+        ? new Set(
+            options.projectIds
+              .map((id) => id.trim())
+              .filter((id) => id.length > 0),
+          )
+        : null;
+    if (projectFilter && projectFilter.size === 0) {
       return { sent: 0, failed: 0, skipped: 0 };
     }
 
@@ -1443,6 +1480,20 @@ export class MessagingService {
     let skipped = 0;
 
     for (const [contactId, group] of byContact) {
+      const contact = await this.contacts
+        .findById(this.toObjectId(contactId, 'contact'))
+        .exec();
+      if (!contact?.active) {
+        skipped += group.length;
+        continue;
+      }
+      if (projectFilter) {
+        const contactProject = contact.projectId?.trim();
+        if (!contactProject || !projectFilter.has(contactProject)) {
+          skipped += group.length;
+          continue;
+        }
+      }
       const sequence = await this.resolveNextCatalogSend(
         this.toObjectId(contactId, 'contact'),
         {
@@ -2145,7 +2196,16 @@ export class MessagingService {
     return result;
   }
 
-  private async kickoffTaskChecklists(slotKey: string): Promise<void> {
+  private async kickoffTaskChecklists(
+    slotKey: string,
+    projectIds: string[] = [],
+  ): Promise<void> {
+    const allowedProjects = new Set(
+      projectIds.map((id) => id.trim()).filter((id) => id.length > 0),
+    );
+    if (allowedProjects.size === 0) {
+      return;
+    }
     const assigned = await this.catalog
       .find({
         active: true,
@@ -2166,6 +2226,10 @@ export class MessagingService {
         .findById(this.toObjectId(contactId, 'contact'))
         .exec();
       if (!contact?.active) {
+        continue;
+      }
+      const contactProject = contact.projectId?.trim();
+      if (!contactProject || !allowedProjects.has(contactProject)) {
         continue;
       }
       if (contact.catalogSlotKey && contact.catalogSlotKey !== slotKey) {
@@ -2200,6 +2264,11 @@ export class MessagingService {
       return;
     }
 
+    const projectId = contact.projectId?.trim();
+    if (!projectId) {
+      return;
+    }
+
     const openAsk = await this.messages
       .findOne({
         contactId: contact._id,
@@ -2214,7 +2283,7 @@ export class MessagingService {
       return;
     }
 
-    const loaded = await this.loadPendingObjectiveTasksFromLatestSource();
+    const loaded = await this.loadPendingObjectiveTasksForProject(projectId);
     if (!loaded) {
       return;
     }
@@ -2272,6 +2341,7 @@ export class MessagingService {
         taskId: task.taskId,
         taskLabel: task.label,
         sourceId,
+        projectId,
         slotKey,
         status: 'sent',
         providerMessageId: result.providerMessageId,
@@ -2294,6 +2364,7 @@ export class MessagingService {
         taskId: task.taskId,
         taskLabel: task.label,
         sourceId,
+        projectId,
         slotKey,
         status: 'failed',
         error: error instanceof Error ? error.message : 'unknown error',
@@ -2321,11 +2392,17 @@ export class MessagingService {
     await this.sendNextTaskChecklistAsk(contact, contact.catalogSlotKey);
   }
 
-  private async loadPendingObjectiveTasksFromLatestSource(): Promise<{
-    sourceId: Types.ObjectId;
-    tasks: ReturnType<typeof extractPendingObjectiveTasks>;
-  } | null> {
-    const rows = await this.sources.find({}).exec();
+  /**
+   * Newest SourceOfTruth for a Nodika obra. Never mixes projects.
+   */
+  private async resolveSourceForProject(
+    projectId: string,
+  ): Promise<(SourceOfTruth & { _id: Types.ObjectId }) | null> {
+    const trimmed = projectId.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const rows = await this.sources.find({ projectId: trimmed }).exec();
     if (!rows.length) {
       return null;
     }
@@ -2338,7 +2415,17 @@ export class MessagingService {
         right._id.getTimestamp().getTime();
       return rightAt - leftAt;
     })[0];
-    if (!latest?._id) {
+    return latest?._id ? latest : null;
+  }
+
+  private async loadPendingObjectiveTasksForProject(
+    projectId: string,
+  ): Promise<{
+    sourceId: Types.ObjectId;
+    tasks: ReturnType<typeof extractPendingObjectiveTasks>;
+  } | null> {
+    const latest = await this.resolveSourceForProject(projectId);
+    if (!latest) {
       return null;
     }
     return {
@@ -2359,7 +2446,14 @@ export class MessagingService {
   private async syncCatalogDispatchSlot(
     slotKey: string,
     slotStart: Date,
+    projectIds: string[] = [],
   ): Promise<void> {
+    const allowedProjects = new Set(
+      projectIds.map((id) => id.trim()).filter((id) => id.length > 0),
+    );
+    if (allowedProjects.size === 0) {
+      return;
+    }
     const assigned = await this.catalog
       .find({
         active: true,
@@ -2377,6 +2471,10 @@ export class MessagingService {
       const contactOid = this.toObjectId(contactId, 'contact');
       const contact = await this.contacts.findById(contactOid).exec();
       if (!contact) {
+        continue;
+      }
+      const contactProject = contact.projectId?.trim();
+      if (!contactProject || !allowedProjects.has(contactProject)) {
         continue;
       }
       if (contact.catalogSlotKey === slotKey) {

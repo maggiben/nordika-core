@@ -40,6 +40,7 @@ export class AccountService {
       email: account.email,
       language,
       languages: ['es', 'en'] as AppLanguage[],
+      activeProjectId: account.activeProjectId ?? null,
       emailSchedule,
       nextSendDates: computeNextSendDates(emailSchedule),
     };
@@ -68,14 +69,28 @@ export class AccountService {
       ? normalizeLanguage(dto.language)
       : normalizeLanguage(account.language, DEFAULT_LANGUAGE);
 
+    const set: Record<string, unknown> = {
+      language,
+      emailNotificationSchedule: schedule,
+    };
+    const unset: Record<string, 1> = {};
+    if ('activeProjectId' in dto && dto.activeProjectId !== undefined) {
+      const next = dto.activeProjectId;
+      if (next === null || next === '') {
+        unset.activeProjectId = 1;
+      } else {
+        set.activeProjectId = next.trim();
+      }
+    }
+
+    const update: Record<string, unknown> = { $set: set };
+    if (Object.keys(unset).length > 0) {
+      update.$unset = unset;
+    }
+
     const updated = await this.accounts.findByIdAndUpdate(
       new Types.ObjectId(accountId),
-      {
-        $set: {
-          language,
-          emailNotificationSchedule: schedule,
-        },
-      },
+      update,
       { new: true },
     );
 
@@ -87,6 +102,7 @@ export class AccountService {
       email: updated.email,
       language,
       languages: ['es', 'en'] as AppLanguage[],
+      activeProjectId: updated.activeProjectId ?? null,
       emailSchedule: schedule,
       nextSendDates: computeNextSendDates(schedule),
     };

@@ -61,6 +61,11 @@ export class CreateContactDto {
   @IsString({ each: true })
   @ArrayMaxSize(20)
   tags?: string[];
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 120)
+  projectId?: string;
 }
 
 export class UpdateContactDto {
@@ -83,6 +88,11 @@ export class UpdateContactDto {
   @IsString({ each: true })
   @ArrayMaxSize(20)
   tags?: string[];
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 120)
+  projectId?: string;
 }
 
 export class TemplateBodyDto {

@@ -4,14 +4,16 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
+import type { Connection, Model } from 'mongoose';
+import { projectIdFromSnapshotContent } from './project-id';
 import { SOURCE_OF_TRUTH_MODEL, sourceOfTruthSchema } from './source.schema';
 import type { SourceOfTruth } from './source.schema';
-import type { Connection, Model } from 'mongoose';
 
 export interface CreatedSource {
   id: string;
   filename: string;
   createdAt: Date;
+  projectId: string | null;
 }
 
 @Injectable()
@@ -24,12 +26,18 @@ export class SourcesService {
 
   async create(filename: string, content: unknown): Promise<CreatedSource> {
     const sourceModel = this.getSourceModel();
-    const source = await sourceModel.create({ filename, content });
+    const projectId = projectIdFromSnapshotContent(content);
+    const source = await sourceModel.create({
+      filename,
+      content,
+      ...(projectId ? { projectId } : {}),
+    });
 
     return {
       id: source.id,
       filename: source.filename,
       createdAt: source.createdAt,
+      projectId: source.projectId ?? null,
     };
   }
 

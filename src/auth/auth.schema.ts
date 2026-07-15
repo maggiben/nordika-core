@@ -15,6 +15,8 @@ export interface Account {
   identities: { provider: string; subject: string }[];
   roles: string[];
   language?: string;
+  /** Active Nodika obra; WhatsApp task/catalog dispatch is scoped to this id. */
+  activeProjectId?: string;
   emailNotificationSchedule?: EmailNotificationSchedule;
   /** Dedup key for the last scheduled notification slot that was claimed. */
   lastNotificationSlot?: string;
@@ -68,6 +70,7 @@ export const accountSchema = new Schema<Account>(
       default: 'es',
       trim: true,
     },
+    activeProjectId: { type: String, trim: true, index: true },
     emailNotificationSchedule: {
       enabled: { type: Boolean, default: false },
       frequency: {

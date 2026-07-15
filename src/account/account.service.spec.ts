@@ -220,6 +220,7 @@ describe('AccountService', () => {
     expect(result.email).toBe('person@example.com');
     expect(result.language).toBe('en');
     expect(result.languages).toEqual(['es', 'en']);
+    expect(result.activeProjectId).toBeNull();
     expect(result.emailSchedule.enabled).toBe(true);
     expect(Array.isArray(result.nextSendDates)).toBe(true);
   });
@@ -247,6 +248,7 @@ describe('AccountService', () => {
     accounts.findByIdAndUpdate.mockResolvedValue({
       email: 'person@example.com',
       language: 'en',
+      activeProjectId: 'proj_north',
     });
 
     const result = await service.updateSettings('507f1f77bcf86cd799439011', {
@@ -257,12 +259,41 @@ describe('AccountService', () => {
       dayOfMonth: 15,
       sendTime: '11:00',
       timezone: 'UTC',
+      activeProjectId: 'proj_north',
     });
 
     expect(result.language).toBe('en');
+    expect(result.activeProjectId).toBe('proj_north');
     expect(result.emailSchedule.frequency).toBe('monthly');
     expect(result.emailSchedule.dayOfMonth).toBe(15);
     expect(accounts.findByIdAndUpdate).toHaveBeenCalled();
+    const updateCall = accounts.findByIdAndUpdate.mock.calls[0] as
+      [unknown, { $set?: { activeProjectId?: string } }, unknown?] | undefined;
+    expect(updateCall?.[1].$set?.activeProjectId).toBe('proj_north');
+  });
+
+  it('clears activeProjectId when set to null', async () => {
+    accounts.findById.mockResolvedValue({
+      email: 'person@example.com',
+      language: 'es',
+      activeProjectId: 'proj_old',
+      emailNotificationSchedule: null,
+    });
+    accounts.findByIdAndUpdate.mockResolvedValue({
+      email: 'person@example.com',
+      language: 'es',
+    });
+
+    const result = await service.updateSettings('507f1f77bcf86cd799439011', {
+      activeProjectId: null,
+    });
+
+    expect(result.activeProjectId).toBeNull();
+    expect(accounts.findByIdAndUpdate).toHaveBeenCalled();
+    const clearCall = accounts.findByIdAndUpdate.mock.calls[0] as
+      | [unknown, { $unset?: { activeProjectId?: number } }, unknown?]
+      | undefined;
+    expect(clearCall?.[1].$unset?.activeProjectId).toBe(1);
   });
 
   it('rejects missing accounts when updating settings', async () => {

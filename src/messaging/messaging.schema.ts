@@ -35,6 +35,8 @@ export interface WhatsAppContact {
   language?: string;
   active: boolean;
   tags: string[];
+  /** Nodika obra this jefe belongs to; dispatch only when equals active project. */
+  projectId?: string;
   /** Active catalog notification slot; replies before this cycle are ignored. */
   catalogSlotKey?: string;
   catalogSlotStartAt?: Date;
@@ -106,6 +108,8 @@ export interface StaffMessage {
   taskId?: string;
   taskLabel?: string;
   sourceId?: Types.ObjectId;
+  /** Nodika obra id; partitions message history per source of truth. */
+  projectId?: string;
   slotKey?: string;
   sentAt?: Date;
   /** When the recipient is considered to have received the outbound ask (usually sentAt). */
@@ -153,6 +157,7 @@ export const whatsAppContactSchema = new Schema<WhatsAppContact>(
     },
     active: { type: Boolean, required: true, default: true },
     tags: { type: [String], required: true, default: [] },
+    projectId: { type: String, trim: true, index: true },
     catalogSlotKey: { type: String },
     catalogSlotStartAt: { type: Date },
   },
@@ -298,6 +303,7 @@ export const staffMessageSchema: Schema<StaffMessage> =
         ref: 'SourceOfTruth',
         index: true,
       },
+      projectId: { type: String, trim: true, index: true },
       slotKey: { type: String, trim: true, index: true },
       sentAt: Date,
       receivedAt: Date,

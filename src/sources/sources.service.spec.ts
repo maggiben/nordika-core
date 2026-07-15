@@ -9,6 +9,7 @@ describe('SourcesService', () => {
       id: 'source-id',
       filename: 'source.json',
       createdAt,
+      projectId: 'proj_1',
     });
     const sourceModel = { create };
     const model = jest.fn().mockReturnValue(sourceModel);
@@ -16,15 +17,20 @@ describe('SourcesService', () => {
     const service = new SourcesService(connection);
 
     await expect(
-      service.create('source.json', { enabled: true }),
+      service.create('source.json', {
+        meta: { projectId: 'proj_1' },
+        enabled: true,
+      }),
     ).resolves.toEqual({
       id: 'source-id',
       filename: 'source.json',
       createdAt,
+      projectId: 'proj_1',
     });
     expect(create).toHaveBeenCalledWith({
-      content: { enabled: true },
+      content: { meta: { projectId: 'proj_1' }, enabled: true },
       filename: 'source.json',
+      projectId: 'proj_1',
     });
   });
 

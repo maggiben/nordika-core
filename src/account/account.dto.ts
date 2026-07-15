@@ -9,6 +9,7 @@ import {
   Matches,
   Max,
   Min,
+  ValidateIf,
 } from 'class-validator';
 
 export class UpdateAccountSettingsDto {
@@ -46,6 +47,13 @@ export class UpdateAccountSettingsDto {
   @IsString()
   @Length(3, 64)
   timezone?: string;
+
+  /** Set the active obra; pass null to clear. */
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null && value !== undefined)
+  @IsString()
+  @Length(1, 120)
+  activeProjectId?: string | null;
 }
 
 /** @deprecated Prefer UpdateAccountSettingsDto; kept for backward-compatible payloads. */

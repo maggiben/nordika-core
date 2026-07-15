@@ -263,6 +263,7 @@ describe('MessagingService', () => {
     active: boolean;
     tags: string[];
     language?: string;
+    projectId?: string;
     catalogSlotKey?: string;
     catalogSlotStartAt?: Date;
   }>();
@@ -340,19 +341,23 @@ describe('MessagingService', () => {
   const sources = createModelMock<{
     filename: string;
     content: unknown;
+    projectId?: string;
     createdAt?: Date;
   }>();
   // Override create to stamp createdAt for "latest source" sorting.
   const originalSourcesCreate = sources.create;
-  sources.create = jest.fn((doc: { filename: string; content: unknown }) => {
-    return originalSourcesCreate({
-      ...doc,
-      createdAt: new Date(),
-    });
-  }) as typeof sources.create;
+  sources.create = jest.fn(
+    (doc: { filename: string; content: unknown; projectId?: string }) => {
+      return originalSourcesCreate({
+        ...doc,
+        createdAt: new Date(),
+      });
+    },
+  ) as typeof sources.create;
 
   const accounts = createModelMock<{
     email: string;
+    activeProjectId?: string;
     emailNotificationSchedule?: {
       enabled: boolean;
       frequency: 'weekly' | 'monthly';
@@ -363,6 +368,8 @@ describe('MessagingService', () => {
     };
     lastNotificationSlot?: string;
   }>();
+
+  const ACTIVE_PROJECT = 'proj_active';
 
   const isConfigured = jest.fn(() => true);
   const sendInteractive = jest.fn(() =>
@@ -783,6 +790,7 @@ describe('MessagingService', () => {
     const asOf = new Date('2026-07-15T12:00:00.000Z');
     await accounts.create({
       email: 'ops@example.com',
+      activeProjectId: ACTIVE_PROJECT,
       emailNotificationSchedule: {
         enabled: true,
         frequency: 'weekly',
@@ -797,6 +805,7 @@ describe('MessagingService', () => {
       label: 'Estructura',
       active: true,
       tags: ['staff'],
+      projectId: ACTIVE_PROJECT,
     });
     await catalog.create({
       title: 'Avance',
@@ -834,6 +843,7 @@ describe('MessagingService', () => {
     const thursday = new Date('2026-07-16T12:00:00.000Z');
     await accounts.create({
       email: 'ops@example.com',
+      activeProjectId: ACTIVE_PROJECT,
       emailNotificationSchedule: schedule,
     });
     const lead = await contacts.create({
@@ -841,6 +851,7 @@ describe('MessagingService', () => {
       label: 'Benjamin',
       active: true,
       tags: ['staff'],
+      projectId: ACTIVE_PROJECT,
     });
     const first = await service.createCatalogMessage({
       title: 'Performance del equipo',
@@ -968,6 +979,7 @@ describe('MessagingService', () => {
     const wednesday = new Date('2026-07-15T12:00:00.000Z');
     const account = await accounts.create({
       email: 'ops@example.com',
+      activeProjectId: ACTIVE_PROJECT,
       emailNotificationSchedule: schedule,
     });
     const lead = await contacts.create({
@@ -975,6 +987,7 @@ describe('MessagingService', () => {
       label: 'Benjamin',
       active: true,
       tags: ['staff'],
+      projectId: ACTIVE_PROJECT,
     });
     await service.createCatalogMessage({
       title: 'Performance del equipo',
@@ -1008,6 +1021,7 @@ describe('MessagingService', () => {
     const wednesday = new Date('2026-07-15T12:00:00.000Z');
     await accounts.create({
       email: 'ops@example.com',
+      activeProjectId: ACTIVE_PROJECT,
       emailNotificationSchedule: {
         enabled: true,
         frequency: 'weekly',
@@ -1022,6 +1036,7 @@ describe('MessagingService', () => {
       label: 'Benjamin',
       active: true,
       tags: ['staff'],
+      projectId: ACTIVE_PROJECT,
     });
     await service.createCatalogMessage({
       title: 'Performance del equipo',
@@ -1081,6 +1096,7 @@ describe('MessagingService', () => {
       label: 'Benjamin',
       active: true,
       tags: ['staff'],
+      projectId: ACTIVE_PROJECT,
       catalogSlotKey: '2026-07-15T10:00|America/Argentina/Buenos_Aires|weekly',
       catalogSlotStartAt: newSlotStart,
     });
@@ -1146,6 +1162,7 @@ describe('MessagingService', () => {
     const asOf = new Date('2026-07-15T12:00:00.000Z');
     await accounts.create({
       email: 'ops@example.com',
+      activeProjectId: ACTIVE_PROJECT,
       emailNotificationSchedule: {
         enabled: true,
         frequency: 'weekly',
@@ -1169,6 +1186,7 @@ describe('MessagingService', () => {
     const asOf = new Date('2026-07-15T12:01:00.000Z');
     await accounts.create({
       email: 'ops@example.com',
+      activeProjectId: ACTIVE_PROJECT,
       emailNotificationSchedule: {
         enabled: true,
         frequency: 'weekly',
@@ -1189,6 +1207,7 @@ describe('MessagingService', () => {
     process.env.RESEND_TO = 'copy@example.com';
     await accounts.create({
       email: 'ops@example.com',
+      activeProjectId: ACTIVE_PROJECT,
       emailNotificationSchedule: {
         enabled: true,
         frequency: 'monthly',
@@ -1405,6 +1424,7 @@ describe('MessagingService', () => {
       label: 'Benjamin',
       active: true,
       tags: ['staff'],
+      projectId: ACTIVE_PROJECT,
     });
     const first = await service.createCatalogMessage({
       title: 'Performance del equipo',
@@ -1504,6 +1524,7 @@ describe('MessagingService', () => {
       label: 'Benjamin',
       active: true,
       tags: ['staff'],
+      projectId: ACTIVE_PROJECT,
     });
     const first = await service.createCatalogMessage({
       title: 'Performance del equipo',
@@ -2178,6 +2199,7 @@ describe('MessagingService', () => {
       label: 'Benjamin',
       active: true,
       tags: ['staff'],
+      projectId: ACTIVE_PROJECT,
       catalogSlotKey: '2026-07-15T09:00|America/Argentina/Buenos_Aires|weekly',
       catalogSlotStartAt: new Date('2026-07-15T12:00:00.000Z'),
     });
@@ -2188,6 +2210,7 @@ describe('MessagingService', () => {
     });
     await sources.create({
       filename: 'obra.json',
+      projectId: ACTIVE_PROJECT,
       content: {
         tareas_con_objetivo: [
           {
@@ -2258,6 +2281,7 @@ describe('MessagingService', () => {
       label: 'Benjamin',
       active: true,
       tags: ['staff'],
+      projectId: ACTIVE_PROJECT,
       catalogSlotKey: '2026-07-15T09:00|America/Argentina/Buenos_Aires|weekly',
       catalogSlotStartAt: new Date('2026-07-15T12:00:00.000Z'),
     });
@@ -2273,6 +2297,7 @@ describe('MessagingService', () => {
     });
     await sources.create({
       filename: 'obra.json',
+      projectId: ACTIVE_PROJECT,
       content: {
         tareas_con_objetivo: [
           { id: 'carp', label: 'colocacion carpinterias', avance_base: 20 },
@@ -2293,6 +2318,7 @@ describe('MessagingService', () => {
       }
     ).kickoffTaskChecklists(
       '2026-07-15T09:00|America/Argentina/Buenos_Aires|weekly',
+      [ACTIVE_PROJECT],
     );
     expect(sendInteractive).not.toHaveBeenCalled();
     expect(
@@ -2306,11 +2332,13 @@ describe('MessagingService', () => {
       label: 'Benjamin',
       active: true,
       tags: ['staff'],
+      projectId: ACTIVE_PROJECT,
       catalogSlotKey: 'slot-a',
       catalogSlotStartAt: new Date('2026-07-15T12:00:00.000Z'),
     });
     await sources.create({
       filename: 'obra.json',
+      projectId: ACTIVE_PROJECT,
       content: {
         tareas_con_objetivo: [
           { id: 'carp', label: 'colocacion carpinterias', avance_base: 20 },
@@ -2383,17 +2411,101 @@ describe('MessagingService', () => {
     expect(await service.listTaskChecklists({ slotKey: 'slot-b' })).toEqual([]);
   });
 
+  it('isolates task checklist to the contact active project source only', async () => {
+    const lead = await contacts.create({
+      phone: '5491138911800',
+      label: 'Benjamin',
+      active: true,
+      tags: ['staff'],
+      projectId: ACTIVE_PROJECT,
+      catalogSlotKey: 'slot-iso',
+      catalogSlotStartAt: new Date('2026-07-15T12:00:00.000Z'),
+    });
+    await sources.create({
+      filename: 'other.json',
+      projectId: 'proj_other',
+      content: {
+        tareas_con_objetivo: [
+          { id: 'wrong', label: 'otra obra', avance_base: 0 },
+        ],
+      },
+    });
+    await sources.create({
+      filename: 'active.json',
+      projectId: ACTIVE_PROJECT,
+      content: {
+        tareas_con_objetivo: [
+          { id: 'right', label: 'obra activa', avance_base: 5 },
+        ],
+      },
+    });
+    await (
+      service as unknown as {
+        sendNextTaskChecklistAsk: (
+          contact: (typeof contacts.store)[0],
+          slotKey: string,
+        ) => Promise<void>;
+      }
+    ).sendNextTaskChecklistAsk(lead, 'slot-iso');
+    expect(sendInteractive).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        sendInteractive.mock.calls[0] as unknown as [string, { title?: string }]
+      )[1].title,
+    ).toBe('Tarea 1/1 · obra activa');
+    const ask = messages.store.find(
+      (row) => row.source === 'task_checklist' && row.direction === 'outbound',
+    );
+    expect(ask?.projectId).toBe(ACTIVE_PROJECT);
+    expect(ask?.taskId).toBe('right');
+  });
+
+  it('skips scheduled catalog for contacts outside the active project', async () => {
+    const asOf = new Date('2026-07-15T12:00:00.000Z');
+    await accounts.create({
+      email: 'ops@example.com',
+      activeProjectId: ACTIVE_PROJECT,
+      emailNotificationSchedule: {
+        enabled: true,
+        frequency: 'weekly',
+        daysOfWeek: [3],
+        dayOfMonth: 1,
+        sendTime: '09:00',
+        timezone: 'America/Argentina/Buenos_Aires',
+      },
+    });
+    const other = await contacts.create({
+      phone: '5491111111199',
+      label: 'Otra',
+      active: true,
+      tags: ['staff'],
+      projectId: 'proj_other',
+    });
+    await catalog.create({
+      title: 'Avance',
+      body: '¿Cómo va?',
+      assignedContactId: other._id,
+      active: true,
+    });
+    const result = await service.runScheduledNotifications(asOf);
+    expect(result.emailsSent).toBe(1);
+    expect(result.catalogSent).toBe(0);
+    expect(sendInteractive).not.toHaveBeenCalled();
+  });
+
   it('records failed outbound StaffMessage when Evolution send fails', async () => {
     const lead = await contacts.create({
       phone: '5491138911798',
       label: 'Benjamin',
       active: true,
       tags: ['staff'],
+      projectId: ACTIVE_PROJECT,
       catalogSlotKey: 'slot-c',
       catalogSlotStartAt: new Date('2026-07-15T12:00:00.000Z'),
     });
     await sources.create({
       filename: 'obra.json',
+      projectId: ACTIVE_PROJECT,
       content: {
         tareas_con_objetivo: [
           { id: 'carp', label: 'colocacion carpinterias', avance_base: 20 },
