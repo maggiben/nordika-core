@@ -79,13 +79,35 @@ export interface StaffMessage {
   contactId: Types.ObjectId;
   phone: string;
   direction: 'outbound' | 'inbound';
+  /** Full message title when known (catalog / template name). Never truncated. */
+  title?: string;
   templateKey?: string;
+  catalogMessageId?: Types.ObjectId;
+  /** Root outbound message id for this conversation turn. */
+  threadId?: Types.ObjectId;
+  /** Full WhatsApp body text. Never truncated in storage. */
   body: string;
+  /** Full staff reply text when this outbound thread was answered. */
+  replyBody?: string;
   status: 'sent' | 'failed' | 'received';
   providerMessageId?: string;
   error?: string;
+  source?: 'test' | 'remind' | 'dispatch' | 'catalog' | 'webhook';
   sentAt?: Date;
+  /** When the recipient is considered to have received the outbound ask (usually sentAt). */
   receivedAt?: Date;
+  repliedAt?: Date;
+  /** repliedAt - sentAt in milliseconds; precise for AI analysis. */
+  responseLatencyMs?: number;
+  responseStatus?: 'green' | 'yellow' | 'red' | 'pending' | 'neutral';
+}
+
+export interface StaffCatalogMessage {
+  title: string;
+  /** Full message body. Never truncated in storage. */
+  body: string;
+  assignedContactId?: Types.ObjectId;
+  active: boolean;
 }
 
 export type WhatsAppContactDocument = HydratedDocument<WhatsAppContact>;
@@ -94,6 +116,7 @@ export type CicloDocument = HydratedDocument<Ciclo>;
 export type WorkStatusDocument = HydratedDocument<WorkStatus>;
 export type MessageDispatchDocument = HydratedDocument<MessageDispatch>;
 export type StaffMessageDocument = HydratedDocument<StaffMessage>;
+export type StaffCatalogMessageDocument = HydratedDocument<StaffCatalogMessage>;
 
 export const WHATSAPP_CONTACT_MODEL = 'WhatsAppContact';
 export const MESSAGE_TEMPLATE_MODEL = 'MessageTemplate';
@@ -101,6 +124,7 @@ export const CICLO_MODEL = 'Ciclo';
 export const WORK_STATUS_MODEL = 'WorkStatus';
 export const MESSAGE_DISPATCH_MODEL = 'MessageDispatch';
 export const STAFF_MESSAGE_MODEL = 'StaffMessage';
+export const STAFF_CATALOG_MESSAGE_MODEL = 'StaffCatalogMessage';
 
 export const whatsAppContactSchema = new Schema<WhatsAppContact>(
   {
@@ -205,8 +229,20 @@ export const staffMessageSchema = new Schema<StaffMessage>(
       required: true,
       enum: ['outbound', 'inbound'],
     },
+    title: { type: String, trim: true },
     templateKey: { type: String, trim: true },
+    catalogMessageId: {
+      type: Schema.Types.ObjectId,
+      ref: STAFF_CATALOG_MESSAGE_MODEL,
+      index: true,
+    },
+    threadId: {
+      type: Schema.Types.ObjectId,
+      ref: STAFF_MESSAGE_MODEL,
+      index: true,
+    },
     body: { type: String, required: true },
+    replyBody: { type: String },
     status: {
       type: String,
       required: true,
@@ -214,10 +250,40 @@ export const staffMessageSchema = new Schema<StaffMessage>(
     },
     providerMessageId: String,
     error: String,
+    source: {
+      type: String,
+      enum: ['test', 'remind', 'dispatch', 'catalog', 'webhook'],
+    },
     sentAt: Date,
     receivedAt: Date,
+    repliedAt: Date,
+    responseLatencyMs: { type: Number, min: 0 },
+    responseStatus: {
+      type: String,
+      enum: ['green', 'yellow', 'red', 'pending', 'neutral'],
+    },
   },
   { timestamps: true },
 );
 staffMessageSchema.index({ contactId: 1, direction: 1, createdAt: -1 });
 staffMessageSchema.index({ phone: 1, direction: 1, createdAt: -1 });
+staffMessageSchema.index({
+  phone: 1,
+  direction: 1,
+  repliedAt: 1,
+  sentAt: -1,
+});
+
+export const staffCatalogMessageSchema = new Schema<StaffCatalogMessage>(
+  {
+    title: { type: String, required: true, trim: true },
+    body: { type: String, required: true },
+    assignedContactId: {
+      type: Schema.Types.ObjectId,
+      ref: WHATSAPP_CONTACT_MODEL,
+      index: true,
+    },
+    active: { type: Boolean, required: true, default: true },
+  },
+  { timestamps: true },
+);

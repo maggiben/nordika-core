@@ -11,11 +11,14 @@ import { MESSAGING_CACHE_PATHS } from '../cache/cache.constants';
 import { OptionalCacheService } from '../cache/optional-cache.service';
 import { EvolutionClient } from './evolution.client';
 import {
+  CreateCatalogMessageDto,
   CreateCicloDto,
   CreateContactDto,
   CreateTemplateDto,
   InboundMessageDto,
+  SendCatalogMessageDto,
   TestSendDto,
+  UpdateCatalogMessageDto,
   UpdateCicloDto,
   UpdateContactDto,
   UpdateTemplateDto,
@@ -31,7 +34,9 @@ import {
   MessageDispatchDocument,
   MessageTemplate,
   MessageTemplateDocument,
+  STAFF_CATALOG_MESSAGE_MODEL,
   STAFF_MESSAGE_MODEL,
+  StaffCatalogMessageDocument,
   StaffMessage,
   StaffMessageDocument,
   TemplateWidget,
@@ -40,6 +45,11 @@ import {
   WhatsAppContactDocument,
   WorkStatusDocument,
 } from './messaging.schema';
+import {
+  computeResponseLatencyMs,
+  responseStatusFromLatencyMs,
+  responseStatusWhileWaiting,
+} from './staff-response-metrics';
 import {
   computeWeekNumber,
   formatDateOnly,
@@ -68,9 +78,24 @@ export interface StaffRosterRow {
   hasOutbound: boolean;
 }
 
+export interface StaffCatalogRow {
+  _id: string;
+  title: string;
+  body: string;
+  assignedContactId: string | null;
+  assignedLabel: string | null;
+  assignedPhone: string | null;
+  active: boolean;
+  lastSentAt: string | null;
+  repliedAt: string | null;
+  responseLatencyMs: number | null;
+  responseStatus: string;
+}
+
 @Injectable()
 export class MessagingService {
   private readonly logger = new Logger(MessagingService.name);
+  private readonly replyMatchWindowMs = 7 * 24 * 60 * 60 * 1000;
 
   constructor(
     @InjectModel(WHATSAPP_CONTACT_MODEL)
@@ -85,6 +110,8 @@ export class MessagingService {
     private readonly dispatches: Model<MessageDispatchDocument>,
     @InjectModel(STAFF_MESSAGE_MODEL)
     private readonly messages: Model<StaffMessageDocument>,
+    @InjectModel(STAFF_CATALOG_MESSAGE_MODEL)
+    private readonly catalog: Model<StaffCatalogMessageDocument>,
     private readonly evolution: EvolutionClient,
     private readonly cache: OptionalCacheService,
   ) {}
@@ -602,26 +629,285 @@ export class MessagingService {
     ok: true;
     contactId: string | null;
     phone: string;
+    threadId: string | null;
+    responseLatencyMs: number | null;
+    responseStatus: string | null;
   }> {
     const phone = this.normalizePhone(dto.phone);
-    const body = (dto.body ?? dto.text ?? '').trim() || '(respuesta recibida)';
+    const replyBody =
+      (dto.body ?? dto.text ?? '').trim() || '(respuesta recibida)';
+    const repliedAt = new Date();
     const contact = await this.contacts.findOne({ phone }).exec();
     if (!contact) {
       this.logger.warn(`Inbound message for unknown phone ${phone}`);
-      return { ok: true, contactId: null, phone };
+      return {
+        ok: true,
+        contactId: null,
+        phone,
+        threadId: null,
+        responseLatencyMs: null,
+        responseStatus: null,
+      };
+    }
+
+    const recentOutbound = await this.messages
+      .find({
+        contactId: contact._id,
+        direction: 'outbound',
+        status: 'sent',
+      })
+      .sort({ sentAt: -1, createdAt: -1 })
+      .limit(25)
+      .exec();
+    const windowStart = repliedAt.getTime() - this.replyMatchWindowMs;
+    const openThread = recentOutbound.find((item) => {
+      if (item.repliedAt) {
+        return false;
+      }
+      const sentAt =
+        item.sentAt ??
+        (item as StaffMessageDocument & { createdAt?: Date }).createdAt;
+      if (!sentAt) {
+        return false;
+      }
+      return sentAt.getTime() >= windowStart;
+    });
+
+    let responseLatencyMs: number | null = null;
+    let responseStatus: string | null = null;
+    let threadId: Types.ObjectId | null = null;
+
+    if (openThread?.sentAt) {
+      responseLatencyMs = computeResponseLatencyMs(
+        openThread.sentAt,
+        repliedAt,
+      );
+      responseStatus = responseStatusFromLatencyMs(responseLatencyMs);
+      threadId = openThread.threadId ?? openThread._id;
+      openThread.replyBody = replyBody;
+      openThread.repliedAt = repliedAt;
+      openThread.receivedAt = openThread.receivedAt ?? openThread.sentAt;
+      openThread.responseLatencyMs = responseLatencyMs;
+      openThread.responseStatus = responseStatus;
+      if (openThread.save) {
+        await openThread.save();
+      } else {
+        await this.messages
+          .findByIdAndUpdate(openThread._id, {
+            replyBody,
+            repliedAt,
+            receivedAt: openThread.receivedAt,
+            responseLatencyMs,
+            responseStatus,
+            threadId,
+          })
+          .exec();
+      }
     }
 
     await this.recordStaffMessage({
       contactId: contact._id,
       phone,
       direction: 'inbound',
-      body,
+      body: replyBody,
       status: 'received',
       providerMessageId: dto.providerMessageId,
-      receivedAt: new Date(),
+      receivedAt: repliedAt,
+      repliedAt,
+      threadId: threadId ?? undefined,
+      source: 'webhook',
+      catalogMessageId: openThread?.catalogMessageId,
+      title: openThread?.title,
+      responseLatencyMs: responseLatencyMs ?? undefined,
+      responseStatus: responseStatus ?? undefined,
     });
-    await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.roster]);
-    return { ok: true, contactId: String(contact._id), phone };
+    await this.cache.invalidatePaths([
+      MESSAGING_CACHE_PATHS.roster,
+      MESSAGING_CACHE_PATHS.catalog,
+    ]);
+    return {
+      ok: true,
+      contactId: String(contact._id),
+      phone,
+      threadId: threadId ? String(threadId) : null,
+      responseLatencyMs,
+      responseStatus,
+    };
+  }
+
+  async createCatalogMessage(
+    dto: CreateCatalogMessageDto,
+  ): Promise<StaffCatalogRow> {
+    const assignedContactId = dto.assignedContactId?.trim()
+      ? this.toObjectId(dto.assignedContactId, 'contact')
+      : undefined;
+    if (assignedContactId) {
+      const contact = await this.contacts.findById(assignedContactId).exec();
+      if (!contact) {
+        throw new NotFoundException('Assigned contact not found.');
+      }
+    }
+    const created = await this.catalog.create({
+      title: dto.title.trim(),
+      body: dto.body,
+      assignedContactId,
+      active: dto.active ?? true,
+    });
+    await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.catalog]);
+    return this.toCatalogRow(created);
+  }
+
+  async listCatalogMessages(): Promise<StaffCatalogRow[]> {
+    const items = await this.catalog
+      .find({ active: true })
+      .sort({ updatedAt: -1 })
+      .exec();
+    const rows: StaffCatalogRow[] = [];
+    for (const item of items) {
+      rows.push(await this.toCatalogRow(item));
+    }
+    return rows;
+  }
+
+  async updateCatalogMessage(
+    id: string,
+    dto: UpdateCatalogMessageDto,
+  ): Promise<StaffCatalogRow> {
+    const doc = await this.catalog
+      .findById(this.toObjectId(id, 'catalog message'))
+      .exec();
+    if (!doc) {
+      throw new NotFoundException('Catalog message not found.');
+    }
+    if (dto.title !== undefined) {
+      doc.title = dto.title.trim();
+    }
+    if (dto.body !== undefined) {
+      doc.body = dto.body;
+    }
+    if (dto.active !== undefined) {
+      doc.active = dto.active;
+    }
+    if (dto.assignedContactId !== undefined) {
+      if (!dto.assignedContactId.trim()) {
+        doc.assignedContactId = undefined;
+      } else {
+        doc.assignedContactId = this.toObjectId(
+          dto.assignedContactId,
+          'contact',
+        );
+      }
+    }
+    if (doc.save) {
+      await doc.save();
+    }
+    await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.catalog]);
+    return this.toCatalogRow(doc);
+  }
+
+  async assignCatalogMessage(
+    id: string,
+    contactId: string,
+  ): Promise<StaffCatalogRow> {
+    return this.updateCatalogMessage(id, { assignedContactId: contactId });
+  }
+
+  async sendCatalogMessage(
+    id: string,
+    dto: SendCatalogMessageDto = {},
+  ): Promise<{
+    ok: true;
+    phone: string;
+    catalogMessageId: string;
+    threadId: string;
+    providerMessageId?: string;
+  }> {
+    if (!this.evolution.isConfigured()) {
+      throw new ServiceUnavailableException(
+        'WhatsApp messaging is not configured (Evolution API).',
+      );
+    }
+
+    const catalogMessage = await this.catalog
+      .findById(this.toObjectId(id, 'catalog message'))
+      .exec();
+    if (!catalogMessage || !catalogMessage.active) {
+      throw new NotFoundException('Catalog message not found.');
+    }
+
+    const contactId = dto.contactId?.trim()
+      ? this.toObjectId(dto.contactId, 'contact')
+      : catalogMessage.assignedContactId;
+    if (!contactId) {
+      throw new BadRequestException(
+        'Assign a staff member before sending this message.',
+      );
+    }
+
+    const contact = await this.contacts.findById(contactId).exec();
+    if (!contact || !contact.active) {
+      throw new NotFoundException('Contact not found.');
+    }
+
+    const sentAt = new Date();
+    const interactive: InteractiveTemplateBody = {
+      text: catalogMessage.body,
+      title: catalogMessage.title,
+      widgets: [],
+    };
+
+    try {
+      const result = await this.evolution.sendInteractive(
+        contact.phone,
+        interactive,
+        catalogMessage.body,
+      );
+      const recorded = await this.recordStaffMessage({
+        contactId: contact._id,
+        phone: contact.phone,
+        direction: 'outbound',
+        title: catalogMessage.title,
+        body: catalogMessage.body,
+        catalogMessageId: catalogMessage._id,
+        status: 'sent',
+        providerMessageId: result.providerMessageId,
+        sentAt,
+        receivedAt: sentAt,
+        responseStatus: 'pending',
+        source: 'catalog',
+      });
+      if (!catalogMessage.assignedContactId) {
+        catalogMessage.assignedContactId = contact._id;
+        if (catalogMessage.save) {
+          await catalogMessage.save();
+        }
+      }
+      await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.catalog]);
+      return {
+        ok: true,
+        phone: contact.phone,
+        catalogMessageId: String(catalogMessage._id),
+        threadId: String(recorded.threadId ?? recorded._id),
+        providerMessageId: result.providerMessageId,
+      };
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unknown send error';
+      await this.recordStaffMessage({
+        contactId: contact._id,
+        phone: contact.phone,
+        direction: 'outbound',
+        title: catalogMessage.title,
+        body: catalogMessage.body,
+        catalogMessageId: catalogMessage._id,
+        status: 'failed',
+        error: message,
+        sentAt,
+        source: 'catalog',
+        responseStatus: 'neutral',
+      });
+      throw error;
+    }
   }
 
   async runWeeklyStatusDispatch(
@@ -911,9 +1197,77 @@ export class MessagingService {
 
   private async recordStaffMessage(
     data: Omit<StaffMessage, never> & { contactId: Types.ObjectId },
-  ): Promise<void> {
-    await this.messages.create(data);
-    await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.roster]);
+  ): Promise<StaffMessageDocument> {
+    const created = await this.messages.create({
+      ...data,
+      responseStatus:
+        data.responseStatus ??
+        (data.direction === 'outbound' && data.status === 'sent'
+          ? 'pending'
+          : data.responseStatus),
+    });
+    if (data.direction === 'outbound' && !data.threadId) {
+      created.threadId = created._id;
+      if (created.save) {
+        await created.save();
+      }
+    }
+    await this.cache.invalidatePaths([
+      MESSAGING_CACHE_PATHS.roster,
+      MESSAGING_CACHE_PATHS.catalog,
+    ]);
+    return created;
+  }
+
+  private async toCatalogRow(
+    item: StaffCatalogMessageDocument,
+  ): Promise<StaffCatalogRow> {
+    let assignedLabel: string | null = null;
+    let assignedPhone: string | null = null;
+    if (item.assignedContactId) {
+      const contact = await this.contacts
+        .findById(item.assignedContactId)
+        .exec();
+      if (contact) {
+        assignedLabel = contact.label ?? null;
+        assignedPhone = contact.phone;
+      }
+    }
+
+    const deliveries = await this.messages
+      .find({
+        catalogMessageId: item._id,
+        direction: 'outbound',
+        status: 'sent',
+      })
+      .sort({ sentAt: -1, createdAt: -1 })
+      .limit(1)
+      .exec();
+    const last = deliveries[0] ?? null;
+    const sentAt = last?.sentAt ?? null;
+    let responseStatus = last?.responseStatus ?? 'neutral';
+    if (last && !last.repliedAt && sentAt) {
+      responseStatus = responseStatusWhileWaiting(sentAt);
+    }
+
+    return {
+      _id: String(item._id),
+      title: item.title,
+      body: item.body,
+      assignedContactId: item.assignedContactId
+        ? String(item.assignedContactId)
+        : null,
+      assignedLabel,
+      assignedPhone,
+      active: item.active,
+      lastSentAt: sentAt ? sentAt.toISOString() : null,
+      repliedAt: last?.repliedAt ? last.repliedAt.toISOString() : null,
+      responseLatencyMs:
+        typeof last?.responseLatencyMs === 'number'
+          ? last.responseLatencyMs
+          : null,
+      responseStatus,
+    };
   }
 
   private toObjectId(id: string, label: string): Types.ObjectId {

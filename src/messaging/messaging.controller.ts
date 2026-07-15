@@ -16,11 +16,14 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import {
+  CreateCatalogMessageDto,
   CreateCicloDto,
   CreateContactDto,
   CreateTemplateDto,
   RemindDto,
+  SendCatalogMessageDto,
   TestSendDto,
+  UpdateCatalogMessageDto,
   UpdateCicloDto,
   UpdateContactDto,
   UpdateTemplateDto,
@@ -106,6 +109,41 @@ export class MessagingController {
   @CacheTTL(CACHE_TTLS.MESSAGING_DYNAMIC_MS)
   listStaffRoster() {
     return this.messaging.listStaffRoster();
+  }
+
+  @Post('catalog')
+  createCatalogMessage(@Body() dto: CreateCatalogMessageDto) {
+    return this.messaging.createCatalogMessage(dto);
+  }
+
+  @Get('catalog')
+  @CacheTTL(CACHE_TTLS.MESSAGING_DYNAMIC_MS)
+  listCatalogMessages() {
+    return this.messaging.listCatalogMessages();
+  }
+
+  @Patch('catalog/:id')
+  updateCatalogMessage(
+    @Param('id') id: string,
+    @Body() dto: UpdateCatalogMessageDto,
+  ) {
+    return this.messaging.updateCatalogMessage(id, dto);
+  }
+
+  @Post('catalog/:id/assign')
+  assignCatalogMessage(
+    @Param('id') id: string,
+    @Body() dto: { contactId: string },
+  ) {
+    return this.messaging.assignCatalogMessage(id, dto.contactId);
+  }
+
+  @Post('catalog/:id/send')
+  sendCatalogMessage(
+    @Param('id') id: string,
+    @Body() dto: SendCatalogMessageDto,
+  ) {
+    return this.messaging.sendCatalogMessage(id, dto);
   }
 
   @Post('test-send')

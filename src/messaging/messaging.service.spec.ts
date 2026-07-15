@@ -182,6 +182,19 @@ describe('MessagingService', () => {
     error?: string;
     sentAt?: Date;
     receivedAt?: Date;
+    repliedAt?: Date;
+    replyBody?: string;
+    responseLatencyMs?: number;
+    responseStatus?: string;
+    catalogMessageId?: Types.ObjectId;
+    threadId?: Types.ObjectId;
+    title?: string;
+  }>();
+  const catalog = createModelMock<{
+    title: string;
+    body: string;
+    assignedContactId?: Types.ObjectId;
+    active: boolean;
   }>();
 
   const isConfigured = jest.fn(() => true);
@@ -209,6 +222,7 @@ describe('MessagingService', () => {
       workStatuses,
       dispatches,
       messages,
+      catalog,
     ]) {
       model.store.length = 0;
       jest.clearAllMocks();
@@ -228,6 +242,7 @@ describe('MessagingService', () => {
       workStatuses as never,
       dispatches as never,
       messages as never,
+      catalog as never,
       evolution,
       cache,
     );
@@ -760,5 +775,37 @@ describe('MessagingService', () => {
     await expect(
       service.recordInboundMessage({ phone: '5491100000000', text: 'hola' }),
     ).resolves.toMatchObject({ contactId: null });
+  });
+
+  it('creates catalog messages, assigns staff, and records precise reply latency', async () => {
+    const contact = await contacts.create({
+      phone: '5491112345678',
+      active: true,
+      tags: ['staff'],
+      label: 'Estructura',
+    });
+    const catalogMessage = await service.createCatalogMessage({
+      title: 'Pedido de avance',
+      body: '¿Cómo va el sector estructurado esta semana?',
+      assignedContactId: String(contact._id),
+    });
+    expect(catalogMessage.assignedLabel).toBe('Estructura');
+
+    const sent = await service.sendCatalogMessage(catalogMessage._id, {});
+    expect(sent.ok).toBe(true);
+    expect(messages.store[0]?.title).toBe('Pedido de avance');
+    expect(messages.store[0]?.body).toContain('sector estructurado');
+
+    const replied = await service.recordInboundMessage({
+      phone: '5491112345678',
+      body: 'Vamos al 80%, sin desvíos.',
+    });
+    expect(replied.threadId).toBeTruthy();
+    expect(typeof replied.responseLatencyMs).toBe('number');
+    expect(replied.responseStatus).toBe('green');
+
+    const listed = await service.listCatalogMessages();
+    expect(listed[0]?.responseLatencyMs).not.toBeNull();
+    expect(listed[0]?.repliedAt).toBeTruthy();
   });
 });

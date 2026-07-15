@@ -271,3 +271,56 @@ export class TestSendDto {
   @Length(0, 32)
   ciclo_fin?: string;
 }
+
+export class CreateCatalogMessageDto {
+  @IsString()
+  @Length(1, 160)
+  title!: string;
+
+  @IsString()
+  @Length(1, 4000)
+  body!: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 64)
+  assignedContactId?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  active?: boolean;
+}
+
+export class UpdateCatalogMessageDto {
+  @IsOptional()
+  @IsString()
+  @Length(1, 160)
+  title?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 4000)
+  body?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 64)
+  assignedContactId?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  active?: boolean;
+}
+
+export class AssignCatalogMessageDto {
+  @IsString()
+  @Length(1, 64)
+  contactId!: string;
+}
+
+export class SendCatalogMessageDto {
+  @IsOptional()
+  @IsString()
+  @Length(1, 64)
+  contactId?: string;
+}
