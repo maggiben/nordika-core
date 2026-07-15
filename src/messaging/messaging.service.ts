@@ -992,9 +992,16 @@ export class MessagingService {
       (typeof data.id === 'string' && data.id) ||
       undefined;
 
+    const body = conversation.trim();
+    // Status / ack / protocol events often arrive without text. Treating them as
+    // replies was auto-closing step 1 and jumping straight to step 2.
+    if (!body) {
+      return null;
+    }
+
     return {
       phone,
-      body: conversation || '(respuesta recibida)',
+      body,
       providerMessageId,
     };
   }
@@ -1053,8 +1060,10 @@ export class MessagingService {
     responseStatus: string | null;
   }> {
     const phone = this.normalizePhone(dto.phone);
-    const replyBody =
-      (dto.body ?? dto.text ?? '').trim() || '(respuesta recibida)';
+    const rawBody = (dto.body ?? dto.text ?? '').trim();
+    const isMeaningfulReply =
+      rawBody.length > 0 && rawBody !== '(respuesta recibida)';
+    const replyBody = isMeaningfulReply ? rawBody : '(respuesta recibida)';
     const repliedAt = new Date();
     const contact = await this.findContactByPhone(phone);
     if (!contact) {
@@ -1091,16 +1100,15 @@ export class MessagingService {
       }
       return sentAt.getTime() >= windowStart;
     });
-    const openThread = await this.pickOpenOutboundThread(
-      contact._id,
-      openCandidates,
-    );
+    const openThread = isMeaningfulReply
+      ? await this.pickOpenOutboundThread(contact._id, openCandidates)
+      : undefined;
 
     let responseLatencyMs: number | null = null;
     let responseStatus: StaffResponseTrafficLight | null = null;
     let threadId: Types.ObjectId | null = null;
 
-    if (openThread?.sentAt) {
+    if (isMeaningfulReply && openThread?.sentAt) {
       responseLatencyMs = computeResponseLatencyMs(
         openThread.sentAt,
         repliedAt,
@@ -1136,7 +1144,7 @@ export class MessagingService {
       status: 'received',
       providerMessageId: dto.providerMessageId,
       receivedAt: repliedAt,
-      repliedAt,
+      repliedAt: isMeaningfulReply ? repliedAt : undefined,
       threadId: threadId ?? undefined,
       source: 'webhook',
       catalogMessageId: openThread?.catalogMessageId,
@@ -1145,7 +1153,11 @@ export class MessagingService {
       responseStatus: responseStatus ?? undefined,
     });
 
-    if (openThread?.catalogMessageId && openThread.source === 'catalog') {
+    if (
+      isMeaningfulReply &&
+      openThread?.catalogMessageId &&
+      openThread.source === 'catalog'
+    ) {
       try {
         await this.advanceCatalogAfterReply(openThread);
       } catch (error) {
@@ -1901,8 +1913,23 @@ export class MessagingService {
       return;
     }
 
-    // If this next step was already blasted unreplied, just remind that step
-    // (sendCatalogMessage allows same-step reminder). Otherwise send first time.
+    // If this next step was already blasted unreplied, do not re-send it —
+    // the operator already has it. Only send when it was never delivered.
+    const latestNext = await this.messages
+      .find({
+        contactId: current.assignedContactId,
+        catalogMessageId: next._id,
+        direction: 'outbound',
+        source: 'catalog',
+        status: 'sent',
+      })
+      .sort({ sentAt: -1, createdAt: -1 })
+      .limit(1)
+      .exec();
+    if (latestNext[0] && !latestNext[0].repliedAt) {
+      return;
+    }
+
     await this.sendCatalogMessage(String(next._id), {
       contactId: String(current.assignedContactId),
     });

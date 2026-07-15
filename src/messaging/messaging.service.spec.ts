@@ -927,8 +927,8 @@ describe('MessagingService', () => {
       phone: lead.phone,
       body: 'respuesta al primero',
     });
-    // Reply must attach to earliest open catalog (step 1), then send/remind step 2.
-    expect(sendInteractive.mock.calls.length).toBe(before + 1);
+    // Step 2 was already blasted open — do not re-send; just close step 1.
+    expect(sendInteractive.mock.calls.length).toBe(before);
     const openFirst = messages.store.find(
       (item) =>
         String(item.catalogMessageId) === first._id &&
@@ -936,6 +936,25 @@ describe('MessagingService', () => {
         item.repliedAt,
     );
     expect(openFirst).toBeTruthy();
+
+    // Empty / ack-style inbounds must not invent a catalog advance.
+    expect(
+      service.extractInboundFromEvolution({
+        data: {
+          key: { remoteJid: `${lead.phone}@s.whatsapp.net`, fromMe: false },
+          message: {},
+        },
+      }),
+    ).toBeNull();
+    await service.recordInboundMessage({
+      phone: lead.phone,
+      body: '',
+    });
+    await service.recordInboundMessage({
+      phone: lead.phone,
+      body: '(respuesta recibida)',
+    });
+    expect(sendInteractive.mock.calls.length).toBe(before);
   });
 
   it('ignores inactive/mismatched catalog opens when matching a reply', async () => {
