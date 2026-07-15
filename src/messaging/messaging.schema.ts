@@ -121,6 +121,8 @@ export interface MessageFlowNode {
   title: string;
   body: string;
   position: { x: number; y: number };
+  /** When set, send resolves live copy from StaffCatalogMessage. */
+  catalogMessageId?: string;
 }
 
 export interface MessageFlowEdge {
@@ -362,6 +364,7 @@ export const messageFlowSchema: Schema<MessageFlow> = new Schema<MessageFlow>(
           id: { type: String, required: true },
           title: { type: String, required: true },
           body: { type: String, required: true },
+          catalogMessageId: { type: String, trim: true },
           position: {
             x: { type: Number, required: true },
             y: { type: Number, required: true },

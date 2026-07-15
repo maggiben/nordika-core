@@ -265,13 +265,14 @@ describe('MessagingService', () => {
       id: string;
       title: string;
       body: string;
+      catalogMessageId?: string;
       position: { x: number; y: number };
     }>;
     edges: Array<{
       id: string;
       fromNodeId: string;
       toNodeId: string;
-      match: { type: 'equals' | 'contains'; value: string };
+      match: { type: 'equals' | 'contains' | 'any'; value: string };
     }>;
   }>();
   const flowRuns = createModelMock<{
@@ -1238,6 +1239,11 @@ describe('MessagingService', () => {
 
     await service.deleteFlow(String(created._id));
     expect((await service.getFlow(String(created._id))).active).toBe(false);
+    expect(
+      (await service.listFlows()).some(
+        (flow) => flow._id === String(created._id),
+      ),
+    ).toBe(false);
   });
 
   it('restarts flow step numbers at 1 for each contact', async () => {
@@ -1303,6 +1309,71 @@ describe('MessagingService', () => {
       '2/2 · Seguimiento',
       '1/2 · Pregunta',
     ]);
+  });
+
+  it('resolves flow node copy from catalog and rejects inactive catalog links', async () => {
+    const contact = await contacts.create({
+      phone: '5491100000099',
+      label: 'Jefe Cat',
+      active: true,
+      tags: ['staff'],
+      language: 'es',
+    });
+    const catalogRow = await catalog.create({
+      title: 'Cat título',
+      body: 'Cuerpo del catálogo',
+      active: true,
+    });
+    const created = await service.createFlow({
+      name: 'Desde mensjes',
+      startNodeId: 'n1',
+      nodes: [
+        {
+          id: 'n1',
+          title: 'stale',
+          body: 'stale body',
+          catalogMessageId: String(catalogRow._id),
+          position: { x: 0, y: 0 },
+        },
+      ],
+      edges: [],
+    });
+    expect(created.nodes[0]?.title).toBe('Cat título');
+    expect(created.nodes[0]?.body).toBe('Cuerpo del catálogo');
+    expect(created.nodes[0]?.catalogMessageId).toBe(String(catalogRow._id));
+
+    const callsBefore = sendInteractive.mock.calls.length;
+    await service.startFlow(String(created._id), {
+      contactId: String(contact._id),
+    });
+    const sendArgs = sendInteractive.mock.calls[callsBefore] as unknown as [
+      string,
+      { title?: string; text: string },
+    ];
+    expect(sendArgs[1].title).toBe('1/1 · Cat título');
+    expect(sendArgs[1].text).toBe('Cuerpo del catálogo');
+    expect(messages.store[messages.store.length - 1]?.catalogMessageId).toEqual(
+      catalogRow._id,
+    );
+
+    catalog.store[0].active = false;
+    catalog.store[0].title = 'Ignorado';
+    await expect(
+      service.createFlow({
+        name: 'Muerto',
+        startNodeId: 'x',
+        nodes: [
+          {
+            id: 'x',
+            title: 'x',
+            body: 'x',
+            catalogMessageId: String(catalogRow._id),
+            position: { x: 0, y: 0 },
+          },
+        ],
+        edges: [],
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('keeps awaiting_reply when reply does not match and fails at step cap', async () => {

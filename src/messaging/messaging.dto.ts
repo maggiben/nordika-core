@@ -387,6 +387,11 @@ export class FlowNodeDto {
   @Length(1, 4000)
   body!: string;
 
+  @IsOptional()
+  @IsString()
+  @Length(1, 64)
+  catalogMessageId?: string;
+
   @ValidateNested()
   @Type(() => FlowNodePositionDto)
   position!: FlowNodePositionDto;

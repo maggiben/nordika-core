@@ -775,7 +775,10 @@ export class MessagingService {
   }
 
   async listFlows(): Promise<MessageFlowRow[]> {
-    const docs = await this.flows.find({}).sort({ updatedAt: -1 }).exec();
+    const docs = await this.flows
+      .find({ active: true })
+      .sort({ updatedAt: -1 })
+      .exec();
     return docs.map((doc) => this.toFlowRow(doc));
   }
 
@@ -789,11 +792,13 @@ export class MessagingService {
 
   async createFlow(dto: UpsertFlowDto): Promise<MessageFlowRow> {
     assertValidFlowGraph(dto);
+    const nodes = await this.hydrateFlowNodes(dto.nodes);
+    assertValidFlowGraph({ ...dto, nodes });
     const created = await this.flows.create({
       name: dto.name.trim(),
       active: dto.active ?? true,
       startNodeId: dto.startNodeId.trim(),
-      nodes: dto.nodes,
+      nodes,
       edges: dto.edges,
     });
     await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.flows]);
@@ -802,6 +807,8 @@ export class MessagingService {
 
   async updateFlow(id: string, dto: UpsertFlowDto): Promise<MessageFlowRow> {
     assertValidFlowGraph(dto);
+    const nodes = await this.hydrateFlowNodes(dto.nodes);
+    assertValidFlowGraph({ ...dto, nodes });
     const doc = await this.flows.findById(this.toObjectId(id, 'flow')).exec();
     if (!doc) {
       throw new NotFoundException('Flow not found.');
@@ -809,7 +816,7 @@ export class MessagingService {
     doc.name = dto.name.trim();
     doc.active = dto.active ?? doc.active;
     doc.startNodeId = dto.startNodeId.trim();
-    doc.nodes = dto.nodes;
+    doc.nodes = nodes;
     doc.edges = dto.edges;
     if (doc.save) {
       await doc.save();
@@ -1829,6 +1836,40 @@ export class MessagingService {
     }
   }
 
+  private async hydrateFlowNodes(
+    nodes: UpsertFlowDto['nodes'],
+  ): Promise<MessageFlowNode[]> {
+    const resolved: MessageFlowNode[] = [];
+    for (const node of nodes) {
+      const catalogId = node.catalogMessageId?.trim();
+      if (!catalogId) {
+        resolved.push({
+          id: node.id.trim(),
+          title: node.title.trim(),
+          body: node.body.trim(),
+          position: { x: node.position.x, y: node.position.y },
+        });
+        continue;
+      }
+      const catalog = await this.catalog
+        .findById(this.toObjectId(catalogId, 'catalog message'))
+        .exec();
+      if (!catalog || !catalog.active) {
+        throw new BadRequestException(
+          `Catalog message ${catalogId} was not found or is inactive.`,
+        );
+      }
+      resolved.push({
+        id: node.id.trim(),
+        catalogMessageId: String(catalog._id),
+        title: catalog.title,
+        body: catalog.body,
+        position: { x: node.position.x, y: node.position.y },
+      });
+    }
+    return resolved;
+  }
+
   private async sendFlowNodeMessage(input: {
     flow: MessageFlowDocument;
     run: MessageFlowRunDocument;
@@ -1842,12 +1883,29 @@ export class MessagingService {
     }
 
     const { flow, run, contact, node } = input;
+    let title = node.title;
+    let body = node.body;
+    let catalogObjectId: Types.ObjectId | undefined;
+    if (node.catalogMessageId?.trim()) {
+      const catalog = await this.catalog
+        .findById(this.toObjectId(node.catalogMessageId, 'catalog message'))
+        .exec();
+      if (!catalog || !catalog.active) {
+        throw new BadRequestException(
+          `Catalog message ${node.catalogMessageId} was not found or is inactive.`,
+        );
+      }
+      title = catalog.title;
+      body = catalog.body;
+      catalogObjectId = catalog._id;
+    }
+
     const step = Math.max(1, run.stepCount + 1);
     const total = Math.max(1, flow.nodes.length);
-    const labeledTitle = `${step}/${total} · ${node.title}`;
+    const labeledTitle = `${step}/${total} · ${title}`;
     const sentAt = new Date();
     const interactive: InteractiveTemplateBody = {
-      text: node.body,
+      text: body,
       title: labeledTitle,
       widgets: [],
     };
@@ -1860,7 +1918,7 @@ export class MessagingService {
       const result = await this.evolution.sendInteractive(
         contact.phone,
         interactive,
-        node.body,
+        body,
         language,
       );
       return this.recordStaffMessage({
@@ -1868,7 +1926,7 @@ export class MessagingService {
         phone: contact.phone,
         direction: 'outbound',
         title: labeledTitle,
-        body: node.body,
+        body,
         status: 'sent',
         providerMessageId: result.providerMessageId,
         sentAt,
@@ -1878,6 +1936,7 @@ export class MessagingService {
         flowId: flow._id,
         flowRunId: run._id,
         flowNodeId: node.id,
+        catalogMessageId: catalogObjectId,
       });
     } catch (error) {
       const message =
@@ -1887,7 +1946,7 @@ export class MessagingService {
         phone: contact.phone,
         direction: 'outbound',
         title: labeledTitle,
-        body: node.body,
+        body,
         status: 'failed',
         error: message,
         sentAt,
@@ -1895,6 +1954,7 @@ export class MessagingService {
         flowId: flow._id,
         flowRunId: run._id,
         flowNodeId: node.id,
+        catalogMessageId: catalogObjectId,
         responseStatus: 'neutral',
       });
       throw error;
@@ -1911,6 +1971,7 @@ export class MessagingService {
         id: node.id,
         title: node.title,
         body: node.body,
+        catalogMessageId: node.catalogMessageId,
         position: { x: node.position.x, y: node.position.y },
       })),
       edges: doc.edges.map((edge) => ({
