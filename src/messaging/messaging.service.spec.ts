@@ -115,6 +115,34 @@ function createModelMock<T extends object>() {
         },
       }),
     ),
+    updateMany: jest.fn(
+      (filter: Record<string, unknown>, update: Record<string, unknown>) => ({
+        exec: () => {
+          let modified = 0;
+          for (let index = 0; index < store.length; index += 1) {
+            if (!matches(store[index], filter)) {
+              continue;
+            }
+            const patch = { ...update };
+            const unset = patch.$unset;
+            if (unset && typeof unset === 'object') {
+              for (const key of Object.keys(unset)) {
+                delete (store[index] as Record<string, unknown>)[key];
+              }
+              delete patch.$unset;
+            }
+            const set = patch.$set;
+            if (set && typeof set === 'object') {
+              store[index] = { ...store[index], ...(set as Partial<T>) };
+              delete patch.$set;
+            }
+            store[index] = { ...store[index], ...(patch as Partial<T>) };
+            modified += 1;
+          }
+          return Promise.resolve({ modifiedCount: modified });
+        },
+      }),
+    ),
     findOneAndUpdate: jest.fn(
       (
         filter: Record<string, unknown>,
@@ -203,6 +231,26 @@ function matches(
     }
     return left === value;
   });
+}
+
+function backdateCatalogOutbound(
+  store: Array<{
+    catalogMessageId?: Types.ObjectId;
+    direction?: string;
+    sentAt?: Date;
+  }>,
+  catalogId: string,
+  msAgo = 120_000,
+): void {
+  const row = store.find(
+    (item) =>
+      item.direction === 'outbound' &&
+      item.catalogMessageId &&
+      String(item.catalogMessageId) === catalogId,
+  );
+  if (row) {
+    row.sentAt = new Date(Date.now() - msAgo);
+  }
 }
 
 describe('MessagingService', () => {
@@ -888,6 +936,7 @@ describe('MessagingService', () => {
       }),
     ).rejects.toBeInstanceOf(ConflictException);
 
+    backdateCatalogOutbound(messages.store, first._id, 7_200_000);
     const reminded = await service.sendAssignedCatalogMessages();
     expect(reminded.sent).toBe(1);
     expect(sendInteractive).toHaveBeenCalledTimes(3);
@@ -1003,6 +1052,114 @@ describe('MessagingService', () => {
     expect(firstOutbound.repliedAt).toBeUndefined();
   });
 
+  it('does not treat instant Recibido acks as completing step 1', async () => {
+    const lead = await contacts.create({
+      phone: '5491999999999',
+      label: 'Benjamin',
+      active: true,
+      tags: ['staff'],
+    });
+    const first = await service.createCatalogMessage({
+      title: 'Performance del equipo',
+      body: 'Performance',
+      assignedContactId: String(lead._id),
+    });
+    await service.createCatalogMessage({
+      title: 'Asistencia del equipo',
+      body: 'Asistencia',
+      assignedContactId: String(lead._id),
+    });
+
+    messages.store.push({
+      _id: new Types.ObjectId(),
+      contactId: lead._id,
+      phone: lead.phone,
+      direction: 'outbound',
+      body: first.body,
+      status: 'sent',
+      source: 'catalog',
+      catalogMessageId: new Types.ObjectId(first._id),
+      sentAt: new Date(Date.now() - 5_000),
+      repliedAt: new Date(Date.now() - 4_000),
+      replyBody: 'Recibido',
+      title: '1/2 · Performance del equipo',
+      responseStatus: 'green',
+      save: () => Promise.resolve(null as never),
+    });
+    messages.store.push({
+      _id: new Types.ObjectId(),
+      contactId: lead._id,
+      phone: lead.phone,
+      direction: 'inbound',
+      body: 'Recibido',
+      status: 'received',
+      source: 'webhook',
+      catalogMessageId: new Types.ObjectId(first._id),
+      receivedAt: new Date(Date.now() - 4_000),
+      save: () => Promise.resolve(null as never),
+    });
+
+    const batch = await service.sendAssignedCatalogMessages();
+    expect(batch.sent).toBe(1);
+    expect(
+      (
+        sendInteractive.mock.calls.at(-1) as unknown as [
+          string,
+          { title?: string },
+        ]
+      )[1].title,
+    ).toBe('1/2 · Performance del equipo');
+  });
+
+  it('resets catalog reply state so the sequence restarts at step 1', async () => {
+    const lead = await contacts.create({
+      phone: '5491138911794',
+      label: 'Benjamin',
+      active: true,
+      tags: ['staff'],
+    });
+    const first = await service.createCatalogMessage({
+      title: 'Performance del equipo',
+      body: 'Performance',
+      assignedContactId: String(lead._id),
+    });
+    await service.createCatalogMessage({
+      title: 'Asistencia del equipo',
+      body: 'Asistencia',
+      assignedContactId: String(lead._id),
+    });
+    messages.store.push({
+      _id: new Types.ObjectId(),
+      contactId: lead._id,
+      phone: lead.phone,
+      direction: 'outbound',
+      body: first.body,
+      status: 'sent',
+      source: 'catalog',
+      catalogMessageId: new Types.ObjectId(first._id),
+      sentAt: new Date(Date.now() - 120_000),
+      repliedAt: new Date(Date.now() - 60_000),
+      replyBody: 'Recibido',
+      title: '1/2 · Performance del equipo',
+      responseStatus: 'green',
+      save: () => Promise.resolve(null as never),
+    });
+
+    const reset = await service.resetCatalogSequence(String(lead._id));
+    expect(reset).toEqual({ ok: true, reset: 1 });
+
+    const batch = await service.sendAssignedCatalogMessages();
+    expect(batch.sent).toBe(1);
+    expect(
+      (
+        sendInteractive.mock.calls.at(-1) as unknown as [
+          string,
+          { title?: string },
+        ]
+      )[1].title,
+    ).toBe('1/2 · Performance del equipo');
+  });
+
   it('advances to the next catalog step after a reply even if later steps were already blasted', async () => {
     const lead = await contacts.create({
       phone: '5491444444444',
@@ -1029,6 +1186,7 @@ describe('MessagingService', () => {
     await service.sendCatalogMessage(first._id, {
       contactId: String(lead._id),
     });
+    backdateCatalogOutbound(messages.store, first._id);
     // Simulate an older flood that already dropped later steps.
     messages.store.push({
       _id: new Types.ObjectId(),
@@ -1113,6 +1271,7 @@ describe('MessagingService', () => {
     await service.sendCatalogMessage(only._id, {
       contactId: String(lead._id),
     });
+    backdateCatalogOutbound(messages.store, only._id);
     const inactive = await catalog.create({
       title: 'Inactivo',
       body: 'x',
@@ -1232,6 +1391,7 @@ describe('MessagingService', () => {
     await service.sendCatalogMessage(catalogMessage._id, {
       contactId: String(contact._id),
     });
+    backdateCatalogOutbound(messages.store, catalogMessage._id);
     expect(sendInteractive).toHaveBeenCalled();
 
     const reply = await service.recordInboundMessage({
@@ -1356,6 +1516,7 @@ describe('MessagingService', () => {
       )[1].title,
     ).toBe('1/2 · Dos');
 
+    backdateCatalogOutbound(messages.store, second._id);
     await service.recordInboundMessage({
       phone: lead.phone,
       body: 'ok',
@@ -1418,6 +1579,7 @@ describe('MessagingService', () => {
     await service.sendCatalogMessage(lone._id, {
       contactId: String(other._id),
     });
+    backdateCatalogOutbound(messages.store, lone._id);
     await service.recordInboundMessage({
       phone: other.phone,
       body: 'fin',

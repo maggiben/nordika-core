@@ -23,6 +23,7 @@ import {
   CreateTemplateDto,
   RemindDto,
   ReorderCatalogMessagesDto,
+  ResetCatalogSequenceDto,
   SendCatalogMessageDto,
   TestSendDto,
   UpdateCatalogMessageDto,
@@ -133,6 +134,13 @@ export class MessagingController {
     @Body() dto: ReorderCatalogMessagesDto,
   ): Promise<StaffCatalogRow[]> {
     return this.messaging.reorderCatalogMessages(dto);
+  }
+
+  @Post('catalog/reset-sequence')
+  resetCatalogSequence(
+    @Body() dto: ResetCatalogSequenceDto,
+  ): Promise<{ ok: true; reset: number }> {
+    return this.messaging.resetCatalogSequence(dto.contactId);
   }
 
   @Patch('catalog/:id')

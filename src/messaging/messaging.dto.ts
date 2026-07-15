@@ -312,6 +312,12 @@ export class ReorderCatalogMessagesDto {
   orderedIds!: string[];
 }
 
+export class ResetCatalogSequenceDto {
+  @IsString()
+  @Length(1, 64)
+  contactId!: string;
+}
+
 export class SendCatalogMessageDto {
   @IsOptional()
   @IsString()

@@ -112,6 +112,9 @@ export interface StaffCatalogRow {
 export class MessagingService {
   private readonly logger = new Logger(MessagingService.name);
   private readonly replyMatchWindowMs = 7 * 24 * 60 * 60 * 1000;
+  /** Replies faster than this after send are treated as WhatsApp/Evolution ack noise. */
+  private readonly catalogMinReplyDelayMs = 15_000;
+  private readonly catalogReminderMinIntervalMs = 60 * 60 * 1000;
   private readonly resend = new Resend(getAuthConfig().resendApiKey);
   private readonly resendFrom = getAuthConfig().resendFrom;
 
@@ -793,6 +796,37 @@ export class MessagingService {
     return this.listCatalogMessages();
   }
 
+  /**
+   * Clear catalog reply state for a lead so the sequence restarts at step 1.
+   * Does not delete outbound history — only reopens answered steps.
+   */
+  async resetCatalogSequence(contactId: string): Promise<{
+    ok: true;
+    reset: number;
+  }> {
+    const contactOid = this.toObjectId(contactId, 'contact');
+    const contact = await this.contacts.findById(contactOid).exec();
+    if (!contact) {
+      throw new NotFoundException('Contact not found.');
+    }
+    const result = await this.messages
+      .updateMany(
+        {
+          contactId: contactOid,
+          direction: 'outbound',
+          source: 'catalog',
+          repliedAt: { $exists: true },
+        },
+        {
+          $unset: { repliedAt: 1, replyBody: 1, responseLatencyMs: 1 },
+          $set: { responseStatus: 'pending' },
+        },
+      )
+      .exec();
+    await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.catalog]);
+    return { ok: true, reset: result.modifiedCount ?? 0 };
+  }
+
   async deleteCatalogMessage(id: string): Promise<{ ok: true }> {
     const doc = await this.catalog
       .findById(this.toObjectId(id, 'catalog message'))
@@ -1349,6 +1383,27 @@ export class MessagingService {
       if (!sequence.next) {
         skipped += group.length;
         continue;
+      }
+      if (sequence.awaitingReply) {
+        const recent = await this.messages
+          .find({
+            contactId: this.toObjectId(contactId, 'contact'),
+            catalogMessageId: sequence.next._id,
+            direction: 'outbound',
+            source: 'catalog',
+            status: 'sent',
+          })
+          .sort({ sentAt: -1, createdAt: -1 })
+          .exec();
+        const lastSentAt = recent[0]?.sentAt;
+        if (
+          recent.length > 1 &&
+          lastSentAt &&
+          Date.now() - lastSentAt.getTime() < this.catalogReminderMinIntervalMs
+        ) {
+          skipped += group.length;
+          continue;
+        }
       }
       try {
         await this.sendCatalogMessage(String(sequence.next._id), {
@@ -1972,6 +2027,22 @@ export class MessagingService {
    * was stored as a matching inbound row. Outbound-only repliedAt stamps from
    * ack/status webhooks used to skip step 1 and jump straight to step 2.
    */
+  private isMeaningfulCatalogInboundBody(body: string): boolean {
+    const trimmed = body.trim();
+    if (!trimmed || trimmed === '(respuesta recibida)') {
+      return false;
+    }
+    if (trimmed.length < 2) {
+      return false;
+    }
+    const normalized = trimmed
+      .normalize('NFD')
+      .replace(/\p{M}/gu, '')
+      .toLowerCase();
+    const ackLike = new Set(['recibido', 'received', 'vale', 'listo']);
+    return !ackLike.has(normalized);
+  }
+
   private async isCatalogOutboundComplete(
     message: StaffMessageDocument,
   ): Promise<boolean> {
@@ -1979,7 +2050,7 @@ export class MessagingService {
       return false;
     }
     const replyBody = (message.replyBody ?? '').trim();
-    if (!replyBody || replyBody === '(respuesta recibida)') {
+    if (!this.isMeaningfulCatalogInboundBody(replyBody)) {
       return false;
     }
     if (
@@ -2011,7 +2082,18 @@ export class MessagingService {
       return false;
     }
     const inboundBody = (inbound.body ?? '').trim();
-    return inboundBody.length > 0 && inboundBody !== '(respuesta recibida)';
+    if (!this.isMeaningfulCatalogInboundBody(inboundBody)) {
+      return false;
+    }
+    const receivedAt =
+      inbound.receivedAt ??
+      (inbound as StaffMessageDocument & { createdAt?: Date }).createdAt;
+    if (!receivedAt) {
+      return false;
+    }
+    return (
+      receivedAt.getTime() - sentAt.getTime() >= this.catalogMinReplyDelayMs
+    );
   }
 
   /**
@@ -2087,13 +2169,22 @@ export class MessagingService {
       if (!(await this.isCatalogOutboundComplete(last))) {
         await this.reopenInvalidCatalogClose(last);
         // Keep reminding this step; do not advance to later flooded steps.
+        this.logger.log(
+          `Catalog sequence reopen ${String(contactId)} step ${item.sortOrder}/${items.length}: ${item.title}`,
+        );
         return { next: item, awaitingReply: true };
       }
+      this.logger.debug(
+        `Catalog sequence ${String(contactId)} step ${item.sortOrder}/${items.length} complete: ${item.title}`,
+      );
     }
 
     if (!allowRestart) {
       return { next: null, awaitingReply: false };
     }
+    this.logger.log(
+      `Catalog sequence restart ${String(contactId)}: ${items[0]?.title ?? 'none'}`,
+    );
     return { next: items[0] ?? null, awaitingReply: false };
   }
 
