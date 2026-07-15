@@ -76,9 +76,55 @@ describe('account schedule helpers', () => {
       from,
     );
 
-    expect(weekly).toHaveLength(2);
-    expect(monthly).toHaveLength(1);
+    expect(weekly).toEqual([
+      '2026-07-15T09:00:00.000Z',
+      '2026-07-22T09:00:00.000Z',
+    ]);
+    expect(monthly).toEqual(['2026-07-20T10:00:00.000Z']);
     expect(disabled).toEqual([]);
+  });
+
+  it('keeps the current week visible after today’s slot has passed', () => {
+    // Wednesday 15 Jul 2026 ~10:23 America/Argentina/Buenos_Aires
+    const from = new Date('2026-07-15T13:23:00.000Z');
+    const next = computeNextSendDates(
+      {
+        enabled: true,
+        frequency: 'weekly',
+        daysOfWeek: [3],
+        dayOfMonth: 1,
+        sendTime: '09:00',
+        timezone: 'America/Argentina/Buenos_Aires',
+      },
+      3,
+      from,
+    );
+
+    expect(next[0]).toBe('2026-07-15T12:00:00.000Z'); // Wed 09:00 BA this week
+    expect(next[1]).toBe('2026-07-22T12:00:00.000Z');
+    expect(next[2]).toBe('2026-07-29T12:00:00.000Z');
+  });
+
+  it('includes later days still left in the current week', () => {
+    const from = new Date('2026-07-15T13:23:00.000Z');
+    const next = computeNextSendDates(
+      {
+        enabled: true,
+        frequency: 'weekly',
+        daysOfWeek: [1, 4],
+        dayOfMonth: 1,
+        sendTime: '09:00',
+        timezone: 'America/Argentina/Buenos_Aires',
+      },
+      3,
+      from,
+    );
+
+    expect(next).toEqual([
+      '2026-07-13T12:00:00.000Z', // Mon this week
+      '2026-07-16T12:00:00.000Z', // Thu this week
+      '2026-07-20T12:00:00.000Z', // Mon next week
+    ]);
   });
 });
 
