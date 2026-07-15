@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Headers,
+  Logger,
   Post,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -16,18 +17,29 @@ import { MessagingService } from './messaging.service';
 @Controller('messaging/webhooks')
 @Throttle({ default: { limit: 120, ttl: 60_000 } })
 export class MessagingWebhookController {
+  private readonly logger = new Logger(MessagingWebhookController.name);
+
   constructor(private readonly messaging: MessagingService) {}
 
   @Post('evolution')
-  ingestEvolution(
+  async ingestEvolution(
     @Body() body: Record<string, unknown>,
     @Headers('x-webhook-secret') secret?: string,
   ) {
     this.assertWebhookSecret(secret);
     const inbound = this.messaging.extractInboundFromEvolution(body);
     if (!inbound) {
+      const event =
+        typeof body.event === 'string' ? body.event : 'unknown-event';
+      const hasData = body.data !== undefined && body.data !== null;
+      this.logger.warn(
+        `Ignored Evolution webhook (${event}, hasData=${String(hasData)})`,
+      );
       return { ok: true, ignored: true };
     }
+    this.logger.log(
+      `Evolution inbound ${inbound.phone}: ${(inbound.body ?? '').slice(0, 80)}`,
+    );
     return this.messaging.recordInboundMessage(inbound);
   }
 

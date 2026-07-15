@@ -2115,6 +2115,31 @@ describe('MessagingService', () => {
     });
     expect(
       service.extractInboundFromEvolution({
+        event: 'messages.upsert',
+        data: [
+          {
+            key: {
+              remoteJid: '5491112345678@s.whatsapp.net',
+              fromMe: false,
+            },
+            message: { conversation: 'Hola' },
+          },
+        ],
+      }),
+    ).toMatchObject({ phone: '5491112345678', body: 'Hola' });
+    expect(
+      service.extractInboundFromEvolution({
+        data: JSON.stringify({
+          key: {
+            remoteJid: '5491112345678@s.whatsapp.net',
+            fromMe: false,
+          },
+          message: { conversation: 'via-json-string' },
+        }),
+      }),
+    ).toMatchObject({ body: 'via-json-string' });
+    expect(
+      service.extractInboundFromEvolution({
         data: {
           key: {
             remoteJid: '13104062693415@lid',

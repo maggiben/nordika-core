@@ -22,29 +22,29 @@ describe('MessagingWebhookController', () => {
     }
   });
 
-  it('ignores unrecognized Evolution payloads', () => {
+  it('ignores unrecognized Evolution payloads', async () => {
     delete process.env.EVOLUTION_WEBHOOK_SECRET;
     extractInboundFromEvolution.mockReturnValue(null);
-    expect(controller.ingestEvolution({})).toEqual({
+    await expect(controller.ingestEvolution({})).resolves.toEqual({
       ok: true,
       ignored: true,
     });
   });
 
-  it('records inbound Evolution messages when parsed', () => {
+  it('records inbound Evolution messages when parsed', async () => {
     delete process.env.EVOLUTION_WEBHOOK_SECRET;
     extractInboundFromEvolution.mockReturnValue({
       phone: '5491112345678',
       body: 'hola',
     });
-    recordInboundMessage.mockReturnValue({
+    recordInboundMessage.mockResolvedValue({
       ok: true,
       contactId: '1',
       phone: '5491112345678',
     });
-    expect(
+    await expect(
       controller.ingestEvolution({ data: { from: '5491112345678' } }),
-    ).toMatchObject({ ok: true });
+    ).resolves.toMatchObject({ ok: true });
     expect(recordInboundMessage).toHaveBeenCalled();
   });
 

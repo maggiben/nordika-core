@@ -1098,10 +1098,10 @@ export class MessagingService {
   extractInboundFromEvolution(
     payload: Record<string, unknown>,
   ): InboundMessageDto | null {
-    const data =
-      payload.data && typeof payload.data === 'object'
-        ? (payload.data as Record<string, unknown>)
-        : payload;
+    const data = this.evolutionPayloadData(payload);
+    if (!data) {
+      return null;
+    }
 
     const key =
       typeof data.key === 'object' && data.key !== null
@@ -1154,6 +1154,37 @@ export class MessagingService {
       body,
       providerMessageId,
     };
+  }
+
+  /** Normalize Evolution webhook/websocket shapes (`data` object or array). */
+  private evolutionPayloadData(
+    payload: Record<string, unknown>,
+  ): Record<string, unknown> | null {
+    const rawData = payload.data;
+    let raw: unknown = rawData;
+    if (typeof rawData === 'string' && rawData.trim()) {
+      try {
+        raw = JSON.parse(rawData) as object;
+      } catch {
+        return null;
+      }
+    }
+    if (Array.isArray(raw)) {
+      for (const item of raw) {
+        if (typeof item === 'object' && item !== null) {
+          return item as Record<string, unknown>;
+        }
+      }
+      return null;
+    }
+    if (raw && typeof raw === 'object') {
+      return raw as Record<string, unknown>;
+    }
+    // Some Evolution versions post the message object at the root.
+    if (payload.key || payload.message) {
+      return payload;
+    }
+    return null;
   }
 
   /** Prefer real @s.whatsapp.net / @c.us JIDs over privacy @lid identifiers. */
@@ -1228,35 +1259,35 @@ export class MessagingService {
     }
 
     const slotStart = contact.catalogSlotStartAt;
-    const recentOutbound = await this.messages
-      .find({
-        contactId: contact._id,
-        direction: 'outbound',
-        status: 'sent',
-        ...(slotStart ? { sentAt: { $gte: slotStart } } : {}),
-      })
-      .sort({ sentAt: -1, createdAt: -1 })
-      .limit(25)
-      .exec();
     const windowStart = repliedAt.getTime() - this.replyMatchWindowMs;
-    const openCandidates: StaffMessageDocument[] = [];
-    for (const item of recentOutbound) {
-      if (await this.isCatalogOutboundComplete(item, slotStart ?? undefined)) {
-        continue;
-      }
-      const sentAt =
-        item.sentAt ??
-        (item as StaffMessageDocument & { createdAt?: Date }).createdAt;
-      if (!sentAt) {
-        continue;
-      }
-      if (sentAt.getTime() >= windowStart) {
-        openCandidates.push(item);
-      }
+    let openCandidates = isMeaningfulReply
+      ? await this.findOpenOutboundCandidates(
+          contact._id,
+          slotStart ?? undefined,
+          windowStart,
+        )
+      : [];
+    // SlotStart filters can drop a just-sent catalog if clocks / DST skew.
+    // Fall back to the reply window so a real text reply still advances.
+    if (isMeaningfulReply && openCandidates.length === 0 && slotStart) {
+      openCandidates = await this.findOpenOutboundCandidates(
+        contact._id,
+        undefined,
+        windowStart,
+      );
     }
     const openThread = isMeaningfulReply
       ? await this.pickOpenOutboundThread(contact._id, openCandidates)
       : undefined;
+    if (isMeaningfulReply && !openThread) {
+      this.logger.warn(
+        `Inbound from ${contact.phone} had no open outbound to match (slot=${contact.catalogSlotKey ?? 'none'})`,
+      );
+    } else if (isMeaningfulReply && openThread) {
+      this.logger.log(
+        `Inbound from ${contact.phone} matched ${openThread.source ?? 'unknown'} thread ${String(openThread._id)}`,
+      );
+    }
 
     let responseLatencyMs: number | null = null;
     let responseStatus: StaffResponseTrafficLight | null = null;
@@ -2114,6 +2145,39 @@ export class MessagingService {
         await item.save();
       }
     }
+  }
+
+  private async findOpenOutboundCandidates(
+    contactId: Types.ObjectId,
+    slotStart: Date | undefined,
+    windowStartMs: number,
+  ): Promise<StaffMessageDocument[]> {
+    const recentOutbound = await this.messages
+      .find({
+        contactId,
+        direction: 'outbound',
+        status: 'sent',
+        ...(slotStart ? { sentAt: { $gte: slotStart } } : {}),
+      })
+      .sort({ sentAt: -1, createdAt: -1 })
+      .limit(25)
+      .exec();
+    const openCandidates: StaffMessageDocument[] = [];
+    for (const item of recentOutbound) {
+      if (await this.isCatalogOutboundComplete(item, slotStart)) {
+        continue;
+      }
+      const sentAt =
+        item.sentAt ??
+        (item as StaffMessageDocument & { createdAt?: Date }).createdAt;
+      if (!sentAt) {
+        continue;
+      }
+      if (sentAt.getTime() >= windowStartMs) {
+        openCandidates.push(item);
+      }
+    }
+    return openCandidates;
   }
 
   /**
