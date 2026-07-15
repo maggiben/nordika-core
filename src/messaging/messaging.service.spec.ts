@@ -68,6 +68,14 @@ function createModelMock<T extends object>() {
         ),
     })),
     findOne: jest.fn((filter: Record<string, unknown>) => ({
+      sort: () => ({
+        exec: () =>
+          Promise.resolve(
+            store.find((item) =>
+              matches(item as Record<string, unknown>, filter),
+            ) ?? null,
+          ),
+      }),
       exec: () =>
         Promise.resolve(
           store.find((item) =>
@@ -85,18 +93,28 @@ function createModelMock<T extends object>() {
         return Promise.resolve(found);
       },
     })),
-    findByIdAndUpdate: jest.fn((id: Types.ObjectId, update: Partial<T>) => ({
-      exec: () => {
-        const index = store.findIndex(
-          (item) => String(item._id) === String(id),
-        );
-        if (index < 0) {
-          return Promise.resolve(null);
-        }
-        store[index] = { ...store[index], ...update };
-        return Promise.resolve(store[index]);
-      },
-    })),
+    findByIdAndUpdate: jest.fn(
+      (id: Types.ObjectId, update: Partial<T> | Record<string, unknown>) => ({
+        exec: () => {
+          const index = store.findIndex(
+            (item) => String(item._id) === String(id),
+          );
+          if (index < 0) {
+            return Promise.resolve(null);
+          }
+          const patch = { ...(update as Record<string, unknown>) };
+          const unset = patch.$unset;
+          if (unset && typeof unset === 'object') {
+            for (const key of Object.keys(unset)) {
+              delete (store[index] as Record<string, unknown>)[key];
+            }
+            delete patch.$unset;
+          }
+          store[index] = { ...store[index], ...(patch as Partial<T>) };
+          return Promise.resolve(store[index]);
+        },
+      }),
+    ),
     findOneAndUpdate: jest.fn(
       (
         filter: Record<string, unknown>,
@@ -171,6 +189,13 @@ function matches(
       }
       if ('$ne' in ops) {
         return left !== ops.$ne;
+      }
+      if ('$gte' in ops) {
+        const bound = ops.$gte;
+        if (left instanceof Date && bound instanceof Date) {
+          return left.getTime() >= bound.getTime();
+        }
+        return (left as number) >= (bound as number);
       }
     }
     if (left instanceof Types.ObjectId || value instanceof Types.ObjectId) {
@@ -925,6 +950,57 @@ describe('MessagingService', () => {
     expect(sentBody).toBe('Pregunta 1');
     expect(firstOutbound.repliedAt).toBeUndefined();
     expect(firstOutbound.replyBody).toBeUndefined();
+  });
+
+  it('does not skip step 1 when outbound was closed without a matching inbound', async () => {
+    const lead = await contacts.create({
+      phone: '5491888888888',
+      label: 'Capataz ghost',
+      active: true,
+      tags: ['staff'],
+    });
+    const first = await service.createCatalogMessage({
+      title: 'Paso1',
+      body: 'Pregunta 1',
+      assignedContactId: String(lead._id),
+    });
+    await service.createCatalogMessage({
+      title: 'Paso2',
+      body: 'Pregunta 2',
+      assignedContactId: String(lead._id),
+    });
+
+    const firstOutbound = {
+      _id: new Types.ObjectId(),
+      contactId: lead._id,
+      phone: lead.phone,
+      direction: 'outbound',
+      body: first.body,
+      status: 'sent',
+      source: 'catalog',
+      catalogMessageId: new Types.ObjectId(first._id),
+      sentAt: new Date(Date.now() - 120_000),
+      repliedAt: new Date(Date.now() - 60_000),
+      replyBody: 'ok',
+      title: '1/2 · Paso1',
+      responseStatus: 'green',
+      save: () => Promise.resolve(null as never),
+    };
+    messages.store.push(firstOutbound);
+
+    const before = sendInteractive.mock.calls.length;
+    const batch = await service.sendAssignedCatalogMessages();
+    expect(batch.sent).toBe(1);
+    expect(sendInteractive.mock.calls.length).toBe(before + 1);
+    expect(
+      (
+        sendInteractive.mock.calls.at(-1) as unknown as [
+          string,
+          { title?: string; text?: string },
+        ]
+      )[1].title,
+    ).toBe('1/2 · Paso1');
+    expect(firstOutbound.repliedAt).toBeUndefined();
   });
 
   it('advances to the next catalog step after a reply even if later steps were already blasted', async () => {

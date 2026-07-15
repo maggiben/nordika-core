@@ -895,6 +895,9 @@ export class MessagingService {
         ? stepIndex + 1
         : Math.max(1, catalogMessage.sortOrder || 1);
     const labeledTitle = `${step}/${total} · ${catalogMessage.title}`;
+    this.logger.log(
+      `Catalog WhatsApp ${step}/${total} for ${contact.phone}: ${catalogMessage.title}`,
+    );
     const interactive: InteractiveTemplateBody = {
       text: catalogMessage.body,
       title: labeledTitle,
@@ -989,6 +992,14 @@ export class MessagingService {
       data.message && typeof data.message === 'object'
         ? (data.message as Record<string, unknown>)
         : undefined;
+    if (
+      message?.protocolMessage ||
+      message?.messageStubType ||
+      message?.senderKeyDistributionMessage ||
+      message?.reactionMessage
+    ) {
+      return null;
+    }
     const conversation =
       (typeof message?.conversation === 'string' && message.conversation) ||
       (typeof (message?.extendedTextMessage as { text?: string } | undefined)
@@ -1099,20 +1110,21 @@ export class MessagingService {
       .limit(25)
       .exec();
     const windowStart = repliedAt.getTime() - this.replyMatchWindowMs;
-    const openCandidates = recentOutbound.filter((item) => {
-      // Placeholder / ack closures must stay matchable so step 1 is not
-      // skipped in favor of a later flooded step.
-      if (this.isCatalogOutboundComplete(item)) {
-        return false;
+    const openCandidates: StaffMessageDocument[] = [];
+    for (const item of recentOutbound) {
+      if (await this.isCatalogOutboundComplete(item)) {
+        continue;
       }
       const sentAt =
         item.sentAt ??
         (item as StaffMessageDocument & { createdAt?: Date }).createdAt;
       if (!sentAt) {
-        return false;
+        continue;
       }
-      return sentAt.getTime() >= windowStart;
-    });
+      if (sentAt.getTime() >= windowStart) {
+        openCandidates.push(item);
+      }
+    }
     const openThread = isMeaningfulReply
       ? await this.pickOpenOutboundThread(contact._id, openCandidates)
       : undefined;
@@ -1757,14 +1769,16 @@ export class MessagingService {
       typeof last?.responseLatencyMs === 'number'
         ? last.responseLatencyMs
         : null;
+    const catalogComplete =
+      last && (await this.isCatalogOutboundComplete(last)) ? last : null;
     let responseStatus: string = 'neutral';
-    if (last?.repliedAt && latencyMs !== null) {
+    if (catalogComplete?.repliedAt && latencyMs !== null) {
       responseStatus = responseStatusFromLatencyMs(latencyMs);
-    } else if (last?.repliedAt && sentAt) {
+    } else if (catalogComplete?.repliedAt && sentAt) {
       responseStatus = responseStatusFromLatencyMs(
-        computeResponseLatencyMs(sentAt, last.repliedAt),
+        computeResponseLatencyMs(sentAt, catalogComplete.repliedAt),
       );
-    } else if (last && !last.repliedAt && sentAt) {
+    } else if (last && !catalogComplete && sentAt) {
       responseStatus = responseStatusWhileWaiting(sentAt);
     }
 
@@ -1780,7 +1794,9 @@ export class MessagingService {
       sortOrder: item.sortOrder ?? 0,
       active: item.active,
       lastSentAt: sentAt ? sentAt.toISOString() : null,
-      repliedAt: last?.repliedAt ? last.repliedAt.toISOString() : null,
+      repliedAt: catalogComplete?.repliedAt
+        ? catalogComplete.repliedAt.toISOString()
+        : null,
       responseLatencyMs: latencyMs,
       responseStatus,
     };
@@ -1939,7 +1955,10 @@ export class MessagingService {
       .sort({ sentAt: -1, createdAt: -1 })
       .limit(1)
       .exec();
-    if (latestNext[0] && !this.isCatalogOutboundComplete(latestNext[0])) {
+    if (
+      latestNext[0] &&
+      !(await this.isCatalogOutboundComplete(latestNext[0]))
+    ) {
       return;
     }
 
@@ -1949,36 +1968,62 @@ export class MessagingService {
   }
 
   /**
-   * A catalog step only counts as answered when the lead sent real text.
-   * Empty/ack webhooks used to stamp repliedAt with "(respuesta recibida)" and
-   * that falsely skipped step 1 on the next schedule tick.
+   * A catalog step only counts as answered when the lead sent real text that
+   * was stored as a matching inbound row. Outbound-only repliedAt stamps from
+   * ack/status webhooks used to skip step 1 and jump straight to step 2.
    */
-  private isCatalogOutboundComplete(
-    message: Pick<StaffMessageDocument, 'repliedAt' | 'replyBody'>,
-  ): boolean {
+  private async isCatalogOutboundComplete(
+    message: StaffMessageDocument,
+  ): Promise<boolean> {
     if (!message.repliedAt) {
       return false;
     }
-    const body = (message.replyBody ?? '').trim();
-    return body.length > 0 && body !== '(respuesta recibida)';
+    const replyBody = (message.replyBody ?? '').trim();
+    if (!replyBody || replyBody === '(respuesta recibida)') {
+      return false;
+    }
+    if (
+      message.source !== 'catalog' ||
+      !message.catalogMessageId ||
+      !message.contactId
+    ) {
+      return true;
+    }
+
+    const sentAt =
+      message.sentAt ??
+      (message as StaffMessageDocument & { createdAt?: Date }).createdAt;
+    if (!sentAt) {
+      return false;
+    }
+
+    const inbound = await this.messages
+      .findOne({
+        contactId: message.contactId,
+        direction: 'inbound',
+        status: 'received',
+        catalogMessageId: message.catalogMessageId,
+        receivedAt: { $gte: sentAt },
+      })
+      .sort({ receivedAt: -1 })
+      .exec();
+    if (!inbound) {
+      return false;
+    }
+    const inboundBody = (inbound.body ?? '').trim();
+    return inboundBody.length > 0 && inboundBody !== '(respuesta recibida)';
   }
 
   /**
-   * Re-open outbound rows closed only by ack/placeholder text so they can be
-   * matched again and remind step 1 instead of jumping to step 2.
+   * Clear invalid catalog closures so the earliest open step can be reminded.
    */
-  private async reopenPlaceholderCatalogClose(
+  private async reopenInvalidCatalogClose(
     message: StaffMessageDocument,
   ): Promise<void> {
-    if (this.isCatalogOutboundComplete(message) || !message.repliedAt) {
+    if (!message.repliedAt) {
       return;
     }
-    message.repliedAt = undefined;
-    message.replyBody = undefined;
-    message.responseLatencyMs = undefined;
-    message.responseStatus = 'pending';
-    if (message.save) {
-      await message.save();
+    if (await this.isCatalogOutboundComplete(message)) {
       return;
     }
     await this.messages
@@ -1987,6 +2032,10 @@ export class MessagingService {
         responseStatus: 'pending',
       })
       .exec();
+    message.repliedAt = undefined;
+    message.replyBody = undefined;
+    message.responseLatencyMs = undefined;
+    message.responseStatus = 'pending';
   }
 
   /**
@@ -2035,8 +2084,8 @@ export class MessagingService {
       if (!last) {
         return { next: item, awaitingReply: false };
       }
-      if (!this.isCatalogOutboundComplete(last)) {
-        await this.reopenPlaceholderCatalogClose(last);
+      if (!(await this.isCatalogOutboundComplete(last))) {
+        await this.reopenInvalidCatalogClose(last);
         // Keep reminding this step; do not advance to later flooded steps.
         return { next: item, awaitingReply: true };
       }
