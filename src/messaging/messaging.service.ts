@@ -24,6 +24,7 @@ import {
 } from '../config/environment';
 import { LocaleService } from '../i18n/locale.service';
 import { normalizeLanguage } from '../i18n/languages';
+import { projectNombreFromSnapshotContent } from '../sources/project-id';
 import {
   SOURCE_OF_TRUTH_MODEL,
   type SourceOfTruth,
@@ -66,6 +67,11 @@ import {
 } from './messaging.schema';
 import { extractPendingObjectiveTasks } from './pending-objective-tasks';
 import {
+  contactBelongsToAnyProject,
+  mergeContactProjectIds,
+  normalizeContactProjectIds,
+} from './contact-project-ids';
+import {
   computeResponseLatencyMs,
   responseStatusFromLatencyMs,
   responseStatusWhileWaiting,
@@ -93,6 +99,7 @@ export interface StaffRosterRow {
   active: boolean;
   tags: string[];
   projectId?: string | null;
+  projectIds?: string[];
   lastSentAt: string | null;
   lastReceivedAt: string | null;
   lastTemplateKey: string | null;
@@ -173,13 +180,30 @@ export class MessagingService {
   }
 
   async createContact(dto: CreateContactDto): Promise<WhatsAppContactDocument> {
+    const phone = this.normalizePhone(dto.phone);
+    const existing = await this.contacts.findOne({ phone }).exec();
+    if (existing) {
+      // Same phone across obras: merge membership instead of unique-key conflict.
+      return this.updateContact(String(existing._id), {
+        ...(dto.label !== undefined ? { label: dto.label } : {}),
+        ...(dto.language !== undefined ? { language: dto.language } : {}),
+        ...(dto.active !== undefined ? { active: dto.active } : {}),
+        ...(dto.tags !== undefined ? { tags: dto.tags } : {}),
+        ...(dto.projectId !== undefined ? { projectId: dto.projectId } : {}),
+        ...(dto.projectIds !== undefined ? { projectIds: dto.projectIds } : {}),
+      });
+    }
+
+    const projectIds = mergeContactProjectIds(dto.projectIds, dto.projectId);
     const contact = await this.contacts.create({
-      phone: this.normalizePhone(dto.phone),
+      phone,
       label: dto.label,
       language: normalizeLanguage(dto.language, getWhatsAppDefaultLanguage()),
       active: dto.active ?? true,
       tags: dto.tags ?? ['staff'],
-      ...(dto.projectId?.trim() ? { projectId: dto.projectId.trim() } : {}),
+      ...(projectIds.length > 0
+        ? { projectIds, projectId: projectIds[0] }
+        : {}),
     });
     await this.cache.invalidatePaths([
       MESSAGING_CACHE_PATHS.contacts,
@@ -196,8 +220,43 @@ export class MessagingService {
     id: string,
     dto: UpdateContactDto,
   ): Promise<WhatsAppContactDocument> {
+    const existing = await this.contacts
+      .findById(this.toObjectId(id, 'contact'))
+      .exec();
+    if (!existing) {
+      throw new NotFoundException('Contact not found.');
+    }
+
+    const patch: Record<string, unknown> = {};
+    if (dto.label !== undefined) {
+      patch.label = dto.label;
+    }
+    if (dto.language !== undefined) {
+      patch.language = normalizeLanguage(
+        dto.language,
+        getWhatsAppDefaultLanguage(),
+      );
+    }
+    if (dto.active !== undefined) {
+      patch.active = dto.active;
+    }
+    if (dto.tags !== undefined) {
+      patch.tags = dto.tags;
+    }
+    if (dto.projectId !== undefined || dto.projectIds !== undefined) {
+      const projectIds = mergeContactProjectIds(
+        normalizeContactProjectIds(existing),
+        dto.projectIds,
+        dto.projectId,
+      );
+      patch.projectIds = projectIds;
+      if (projectIds.length > 0) {
+        patch.projectId = projectIds[0];
+      }
+    }
+
     const contact = await this.contacts
-      .findByIdAndUpdate(this.toObjectId(id, 'contact'), dto, {
+      .findByIdAndUpdate(this.toObjectId(id, 'contact'), patch, {
         new: true,
         runValidators: true,
       })
@@ -557,7 +616,8 @@ export class MessagingService {
         label: contact.label,
         active: contact.active,
         tags: contact.tags ?? [],
-        projectId: contact.projectId?.trim() || null,
+        projectIds: normalizeContactProjectIds(contact),
+        projectId: normalizeContactProjectIds(contact)[0] ?? null,
         lastSentAt: lastOutbound?.sentAt
           ? lastOutbound.sentAt.toISOString()
           : null,
@@ -990,8 +1050,8 @@ export class MessagingService {
         receivedAt: sentAt,
         responseStatus: 'pending',
         source: 'catalog',
-        ...(contact.projectId?.trim()
-          ? { projectId: contact.projectId.trim() }
+        ...(normalizeContactProjectIds(contact)[0]
+          ? { projectId: normalizeContactProjectIds(contact)[0] }
           : {}),
       });
       if (!catalogMessage.assignedContactId) {
@@ -1027,8 +1087,8 @@ export class MessagingService {
         sentAt,
         source: 'catalog',
         responseStatus: 'neutral',
-        ...(contact.projectId?.trim()
-          ? { projectId: contact.projectId.trim() }
+        ...(normalizeContactProjectIds(contact)[0]
+          ? { projectId: normalizeContactProjectIds(contact)[0] }
           : {}),
       });
       throw error;
@@ -1231,7 +1291,9 @@ export class MessagingService {
     }
 
     const inboundProjectId =
-      openThread?.projectId?.trim() || contact.projectId?.trim() || undefined;
+      openThread?.projectId?.trim() ||
+      normalizeContactProjectIds(contact)[0] ||
+      undefined;
     await this.recordStaffMessage({
       contactId: contact._id,
       phone: contact.phone,
@@ -2242,12 +2304,19 @@ export class MessagingService {
       if (contact.catalogSlotKey && contact.catalogSlotKey !== slotKey) {
         continue;
       }
-      await this.tryStartTaskChecklistForContact(contact);
+      const preferred =
+        allowedProjects === null
+          ? undefined
+          : [...allowedProjects].find((id) =>
+              normalizeContactProjectIds(contact).includes(id),
+            );
+      await this.tryStartTaskChecklistForContact(contact, preferred);
     }
   }
 
   private async tryStartTaskChecklistForContact(
     contact: WhatsAppContactDocument,
+    preferredProjectId?: string,
   ): Promise<void> {
     const slotKey = contact.catalogSlotKey;
     if (!slotKey) {
@@ -2260,25 +2329,37 @@ export class MessagingService {
     if (sequence.next) {
       return;
     }
-    await this.sendNextTaskChecklistAsk(contact, slotKey);
+    await this.sendNextTaskChecklistAsk(contact, slotKey, preferredProjectId);
   }
 
   private async sendNextTaskChecklistAsk(
     contact: WhatsAppContactDocument,
     slotKey: string,
+    preferredProjectId?: string,
   ): Promise<void> {
     if (!this.evolution.isConfigured()) {
       return;
     }
 
-    let projectId = contact.projectId?.trim();
+    const membership = normalizeContactProjectIds(contact);
+    let projectId =
+      (preferredProjectId && membership.includes(preferredProjectId)
+        ? preferredProjectId
+        : undefined) ?? membership[0];
     if (!projectId) {
       projectId = (await this.resolveNewestSourceProjectId()) ?? undefined;
       if (!projectId) {
         return;
       }
-      contact.projectId = projectId;
-      await this.contacts.findByIdAndUpdate(contact._id, { projectId }).exec();
+      const projectIds = mergeContactProjectIds(membership, projectId);
+      contact.projectIds = projectIds;
+      contact.projectId = projectIds[0];
+      await this.contacts
+        .findByIdAndUpdate(contact._id, {
+          projectIds,
+          projectId: projectIds[0],
+        })
+        .exec();
     }
 
     const openAsk = await this.messages
@@ -2299,7 +2380,7 @@ export class MessagingService {
     if (!loaded) {
       return;
     }
-    const { sourceId, tasks } = loaded;
+    const { sourceId, tasks, projectName } = loaded;
     if (tasks.length === 0) {
       return;
     }
@@ -2323,8 +2404,8 @@ export class MessagingService {
     const task = tasks[nextIndex];
     const step = nextIndex + 1;
     const total = tasks.length;
-    const labeledTitle = `Tarea ${step}/${total} · ${task.label}`;
-    const body = `¿Cómo va la tarea "${task.label}"? Contanos el avance actual de la obra.`;
+    const labeledTitle = `${projectName} · Tarea ${step}/${total} · ${task.label}`;
+    const body = `Obra ${projectName}: ¿Cómo va la tarea "${task.label}"? Contanos el avance actual.`;
     const askedAt = new Date();
 
     const language = normalizeLanguage(
@@ -2451,8 +2532,8 @@ export class MessagingService {
   }
 
   /**
-   * Legacy contacts without projectId stay eligible while a single active
-   * obra is in scope (auto-stamped). Explicit mismatches stay excluded.
+   * Contacts with any matching membership are eligible. Legacy empty
+   * membership is auto-stamped when exactly one active obra is in scope.
    */
   private async ensureContactInActiveProjects(
     contact: WhatsAppContactDocument,
@@ -2461,17 +2542,25 @@ export class MessagingService {
     if (!allowed) {
       return true;
     }
-    const contactProject = contact.projectId?.trim();
-    if (contactProject) {
-      return allowed.has(contactProject);
+    if (contactBelongsToAnyProject(contact, allowed)) {
+      return true;
+    }
+    const membership = normalizeContactProjectIds(contact);
+    if (membership.length > 0) {
+      return false;
     }
     if (allowed.size !== 1) {
       return false;
     }
     const onlyProject = [...allowed][0];
+    const projectIds = [onlyProject];
+    contact.projectIds = projectIds;
     contact.projectId = onlyProject;
     await this.contacts
-      .findByIdAndUpdate(contact._id, { projectId: onlyProject })
+      .findByIdAndUpdate(contact._id, {
+        projectIds,
+        projectId: onlyProject,
+      })
       .exec();
     this.logger.log(
       `Stamped projectId ${onlyProject} on legacy contact ${contact.phone}`,
@@ -2509,6 +2598,7 @@ export class MessagingService {
     projectId: string,
   ): Promise<{
     sourceId: Types.ObjectId;
+    projectName: string;
     tasks: ReturnType<typeof extractPendingObjectiveTasks>;
   } | null> {
     const latest = await this.resolveSourceForProject(projectId);
@@ -2517,6 +2607,8 @@ export class MessagingService {
     }
     return {
       sourceId: latest._id,
+      projectName:
+        projectNombreFromSnapshotContent(latest.content) ?? projectId,
       tasks: extractPendingObjectiveTasks(latest.content),
     };
   }

@@ -16,3 +16,14 @@ export function projectIdFromSnapshotContent(content: unknown): string | null {
   const meta = isRecord(content.meta) ? content.meta : {};
   return asString(meta.projectId);
 }
+
+/** Prefer `meta.projectNombre` from a Nodika snapshot payload. */
+export function projectNombreFromSnapshotContent(
+  content: unknown,
+): string | null {
+  if (!isRecord(content)) {
+    return null;
+  }
+  const meta = isRecord(content.meta) ? content.meta : {};
+  return asString(meta.projectNombre);
+}

@@ -26,6 +26,7 @@ import { Types } from 'mongoose';
 import { OptionalCacheService } from '../cache/optional-cache.service';
 import { LocaleService } from '../i18n/locale.service';
 import { EvolutionClient } from './evolution.client';
+import { normalizeContactProjectIds } from './contact-project-ids';
 import { MessagingService } from './messaging.service';
 
 type LeanDoc<T> = T & {
@@ -264,6 +265,7 @@ describe('MessagingService', () => {
     tags: string[];
     language?: string;
     projectId?: string;
+    projectIds?: string[];
     catalogSlotKey?: string;
     catalogSlotStartAt?: Date;
   }>();
@@ -2212,6 +2214,7 @@ describe('MessagingService', () => {
       filename: 'obra.json',
       projectId: ACTIVE_PROJECT,
       content: {
+        meta: { projectId: ACTIVE_PROJECT, projectNombre: 'Pier' },
         tareas_con_objetivo: [
           {
             id: 'carp',
@@ -2235,9 +2238,20 @@ describe('MessagingService', () => {
     expect(sendInteractive).toHaveBeenCalledTimes(1);
     expect(
       (
-        sendInteractive.mock.calls[0] as unknown as [string, { title?: string }]
+        sendInteractive.mock.calls[0] as unknown as [
+          string,
+          { title?: string; text?: string },
+        ]
       )[1].title,
-    ).toBe('Tarea 1/2 · colocacion carpinterias');
+    ).toBe('Pier · Tarea 1/2 · colocacion carpinterias');
+    expect(
+      (
+        sendInteractive.mock.calls[0] as unknown as [
+          string,
+          { title?: string; text?: string },
+        ]
+      )[1].text,
+    ).toContain('Obra Pier:');
     const firstAsk = messages.store.find(
       (row) =>
         row.source === 'task_checklist' &&
@@ -2260,14 +2274,16 @@ describe('MessagingService', () => {
         row.body === 'carpinteria al 60%',
     );
     expect(String(inboundAsk?.questionMessageId)).toBe(String(firstAsk?._id));
-    expect(inboundAsk?.title).toBe('Tarea 1/2 · colocacion carpinterias');
+    expect(inboundAsk?.title).toBe(
+      'Pier · Tarea 1/2 · colocacion carpinterias',
+    );
     expect(inboundAsk?.threadId).toBeTruthy();
     expect(sendInteractive).toHaveBeenCalledTimes(1);
     expect(
       (
         sendInteractive.mock.calls[0] as unknown as [string, { title?: string }]
       )[1].title,
-    ).toBe('Tarea 2/2 · pintura');
+    ).toBe('Pier · Tarea 2/2 · pintura');
 
     const listed = await service.listTaskChecklists({
       contactId: String(lead._id),
@@ -2452,7 +2468,7 @@ describe('MessagingService', () => {
       (
         sendInteractive.mock.calls[0] as unknown as [string, { title?: string }]
       )[1].title,
-    ).toBe('Tarea 1/1 · obra activa');
+    ).toBe(`${ACTIVE_PROJECT} · Tarea 1/1 · obra activa`);
     const ask = messages.store.find(
       (row) => row.source === 'task_checklist' && row.direction === 'outbound',
     );
@@ -2532,6 +2548,72 @@ describe('MessagingService', () => {
       contacts.store.find((row) => String(row._id) === String(legacy._id))
         ?.projectId,
     ).toBe(ACTIVE_PROJECT);
+  });
+
+  it('includes multi-project contacts when any obra matches active', async () => {
+    const asOf = new Date('2026-07-15T12:00:00.000Z');
+    await accounts.create({
+      email: 'ops@example.com',
+      activeProjectId: ACTIVE_PROJECT,
+      emailNotificationSchedule: {
+        enabled: true,
+        frequency: 'weekly',
+        daysOfWeek: [3],
+        dayOfMonth: 1,
+        sendTime: '09:00',
+        timezone: 'America/Argentina/Buenos_Aires',
+      },
+    });
+    const multi = await contacts.create({
+      phone: '5491111111177',
+      label: 'Multi',
+      active: true,
+      tags: ['staff'],
+      projectIds: ['proj_other', ACTIVE_PROJECT],
+    });
+    await catalog.create({
+      title: 'Avance',
+      body: '¿Cómo va?',
+      assignedContactId: multi._id,
+      active: true,
+    });
+    const result = await service.runScheduledNotifications(asOf);
+    expect(result.catalogSent).toBe(1);
+    expect(sendInteractive).toHaveBeenCalledTimes(1);
+  });
+
+  it('merges projectId into existing contact membership on update', async () => {
+    const contact = await contacts.create({
+      phone: '5491111111166',
+      label: 'Merge',
+      active: true,
+      tags: ['staff'],
+      projectIds: ['proj_a'],
+      projectId: 'proj_a',
+    });
+    const updated = await service.updateContact(String(contact._id), {
+      projectId: 'proj_b',
+    });
+    expect(normalizeContactProjectIds(updated)).toEqual(['proj_a', 'proj_b']);
+  });
+
+  it('merges project membership when createContact hits an existing phone', async () => {
+    await contacts.create({
+      phone: '5491111111155',
+      label: 'Lead A',
+      active: true,
+      tags: ['staff'],
+      projectIds: ['proj_a'],
+      projectId: 'proj_a',
+    });
+    const merged = await service.createContact({
+      phone: '5491111111155',
+      label: 'Lead A+B',
+      projectId: 'proj_b',
+    });
+    expect(normalizeContactProjectIds(merged)).toEqual(['proj_a', 'proj_b']);
+    expect(merged.label).toBe('Lead A+B');
+    expect(contacts.store).toHaveLength(1);
   });
 
   it('records failed outbound StaffMessage when Evolution send fails', async () => {

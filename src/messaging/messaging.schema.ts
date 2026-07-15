@@ -35,7 +35,14 @@ export interface WhatsAppContact {
   language?: string;
   active: boolean;
   tags: string[];
-  /** Nodika obra this jefe belongs to; dispatch only when equals active project. */
+  /**
+   * Nodika obras this jefe belongs to. Dispatch when any id matches the
+   * account active project.
+   */
+  projectIds?: string[];
+  /**
+   * @deprecated Prefer `projectIds`. Kept for legacy documents / clients.
+   */
   projectId?: string;
   /** Active catalog notification slot; replies before this cycle are ignored. */
   catalogSlotKey?: string;
@@ -157,6 +164,7 @@ export const whatsAppContactSchema = new Schema<WhatsAppContact>(
     },
     active: { type: Boolean, required: true, default: true },
     tags: { type: [String], required: true, default: [] },
+    projectIds: { type: [String], default: [], index: true },
     projectId: { type: String, trim: true, index: true },
     catalogSlotKey: { type: String },
     catalogSlotStartAt: { type: Date },

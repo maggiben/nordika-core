@@ -62,10 +62,18 @@ export class CreateContactDto {
   @ArrayMaxSize(20)
   tags?: string[];
 
+  /** Adds one obra to membership (merged). */
   @IsOptional()
   @IsString()
   @Length(1, 120)
   projectId?: string;
+
+  /** Merges these obras into membership. */
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(40)
+  projectIds?: string[];
 }
 
 export class UpdateContactDto {
@@ -89,10 +97,18 @@ export class UpdateContactDto {
   @ArrayMaxSize(20)
   tags?: string[];
 
+  /** Adds one obra to membership (merged). */
   @IsOptional()
   @IsString()
   @Length(1, 120)
   projectId?: string;
+
+  /** Merges these obras into membership. */
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(40)
+  projectIds?: string[];
 }
 
 export class TemplateBodyDto {
