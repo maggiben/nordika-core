@@ -32,7 +32,7 @@ export class AuthModule {
       }),
     ];
     const providers = [JwtStrategy, JwtAuthGuard, RolesGuard];
-    const exports = [JwtAuthGuard, RolesGuard];
+    const exports = [JwtAuthGuard, RolesGuard, AuthService];
 
     if (!getMongoUri()) {
       return { module: AuthModule, imports, providers, exports };

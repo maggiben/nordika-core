@@ -1,10 +1,20 @@
 import { HydratedDocument, Schema, Types } from 'mongoose';
 
+export interface EmailNotificationSchedule {
+  enabled: boolean;
+  frequency: 'weekly' | 'monthly';
+  daysOfWeek: number[];
+  dayOfMonth: number;
+  sendTime: string;
+  timezone: string;
+}
+
 export interface Account {
   email: string;
   emailVerifiedAt?: Date;
   identities: { provider: string; subject: string }[];
   roles: string[];
+  emailNotificationSchedule?: EmailNotificationSchedule;
 }
 export interface LocalCredential {
   accountId: Types.ObjectId;
@@ -38,6 +48,17 @@ export const accountSchema = new Schema<Account>(
     emailVerifiedAt: Date,
     identities: [{ provider: { type: String, required: true }, subject: { type: String, required: true } }],
     roles: { type: [String], required: true },
+    emailNotificationSchedule: {
+      enabled: { type: Boolean, default: false },
+      frequency: { type: String, enum: ['weekly', 'monthly'], default: 'weekly' },
+      daysOfWeek: { type: [Number], default: [1] },
+      dayOfMonth: { type: Number, default: 1, min: 1, max: 28 },
+      sendTime: { type: String, default: '09:00' },
+      timezone: {
+        type: String,
+        default: 'America/Argentina/Buenos_Aires',
+      },
+    },
   },
   { timestamps: true },
 );

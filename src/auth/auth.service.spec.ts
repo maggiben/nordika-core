@@ -234,6 +234,38 @@ describe('AuthService', () => {
       UnauthorizedException,
     );
   });
+
+  it('changes passwords for authenticated accounts', async () => {
+    const password = 'current-password';
+    const salt = 'salt';
+    const passwordHash = await new Promise<string>((resolve, reject) =>
+      scrypt(password, salt, 64, (error, key) =>
+        error ? reject(error) : resolve(key.toString('base64url')),
+      ),
+    );
+    accounts.findById.mockResolvedValueOnce(account);
+    credentials.findOne.mockResolvedValueOnce({
+      accountId: account._id,
+      salt,
+      passwordHash,
+    });
+
+    await service.changePassword('account-id', password, 'a-new-password');
+    expect(credentials.updateOne).toHaveBeenCalledWith(
+      { accountId: account._id },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          passwordHash: expect.any(String),
+          salt: expect.any(String),
+        }),
+      }),
+    );
+
+    accounts.findById.mockResolvedValueOnce(null);
+    await expect(
+      service.changePassword('missing', password, 'a-new-password'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
 });
 
 function mockModel() {

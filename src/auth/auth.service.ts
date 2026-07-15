@@ -159,6 +159,47 @@ export class AuthService {
     });
   }
 
+  async changePassword(
+    accountId: string,
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<void> {
+    const account = await this.accounts.findById(accountId);
+    if (!account) {
+      throw genericLoginError();
+    }
+
+    const credential = await this.credentials.findOne({
+      accountId: account._id,
+    });
+    const expected = credential
+      ? Buffer.from(credential.passwordHash, 'base64url')
+      : undefined;
+    const actual = credential
+      ? await scrypt(currentPassword, credential.salt)
+      : undefined;
+
+    if (
+      !expected ||
+      !actual ||
+      expected.length !== actual.length ||
+      !timingSafeEqual(expected, actual)
+    ) {
+      throw genericLoginError();
+    }
+
+    const salt = randomBytes(16).toString('base64url');
+    await this.credentials.updateOne(
+      { accountId: account._id },
+      {
+        $set: {
+          salt,
+          passwordHash: (await scrypt(newPassword, salt)).toString('base64url'),
+        },
+      },
+    );
+  }
+
   private async issue(
     account: Account & { _id: Types.ObjectId },
     token = opaqueToken(),

@@ -3,6 +3,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { AccountModule } from './account/account.module';
 import { AuthModule } from './auth/auth.module';
 import { RedisCacheModule } from './cache/redis-cache.module';
 import { MessagingModule } from './messaging/messaging.module';
@@ -14,6 +15,7 @@ import { SourcesModule } from './sources/sources.module';
     MongoModule.register(),
     RedisCacheModule.register(),
     AuthModule.register(),
+    AccountModule,
     MessagingModule.register(),
     SourcesModule,
     ThrottlerModule.forRoot({
