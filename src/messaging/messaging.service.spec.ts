@@ -909,6 +909,11 @@ describe('MessagingService', () => {
       assignedContactId: String(contact._id),
     });
     expect(catalogMessage.assignedLabel).toBe('Estructura');
+    expect(sendInteractive).not.toHaveBeenCalled();
+
+    await service.sendCatalogMessage(catalogMessage._id, {
+      contactId: String(contact._id),
+    });
     expect(sendInteractive).toHaveBeenCalled();
 
     const reply = await service.recordInboundMessage({
@@ -944,6 +949,7 @@ describe('MessagingService', () => {
       String(contact._id),
     );
     expect(assigned.assignedPhone).toBe('5491199999999');
+    expect(sendInteractive).not.toHaveBeenCalled();
 
     const updated = await service.updateCatalogMessage(created._id, {
       title: 'Draft v2',
@@ -966,6 +972,14 @@ describe('MessagingService', () => {
   });
 
   it('soft-deletes catalog messages so they leave the active list', async () => {
+    const inactive = await service.createCatalogMessage({
+      title: 'Inactivo',
+      body: 'No listar',
+      active: false,
+    });
+    expect(inactive.active).toBe(false);
+    expect(await service.listCatalogMessages()).toHaveLength(0);
+
     const created = await service.createCatalogMessage({
       title: 'Borrar',
       body: 'Temporal',
@@ -1125,6 +1139,27 @@ describe('MessagingService', () => {
       edges: flow.edges,
     });
     expect(updated.name).toBe('Asistencia v2');
+
+    const deactivated = await service.updateFlow(String(flow._id), {
+      name: 'Asistencia v2',
+      active: false,
+      startNodeId: 'ask',
+      nodes: flow.nodes,
+      edges: flow.edges,
+    });
+    expect(deactivated.active).toBe(false);
+    await expect(
+      service.startFlow(String(flow._id), {
+        contactId: String(contact._id),
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    await service.updateFlow(String(flow._id), {
+      name: 'Asistencia v2',
+      active: true,
+      startNodeId: 'ask',
+      nodes: flow.nodes,
+      edges: flow.edges,
+    });
 
     const started = await service.startFlow(String(flow._id), {
       contactId: String(contact._id),

@@ -1,6 +1,15 @@
-import { pickMatchingEdge, replyMatchesEdge } from './messaging.flow-match';
+import {
+  isFlowMatchType,
+  pickMatchingEdge,
+  replyMatchesEdge,
+} from './messaging.flow-match';
 
 describe('messaging.flow-match', () => {
+  it('recognizes equals/contains match types', () => {
+    expect(isFlowMatchType('equals')).toBe(true);
+    expect(isFlowMatchType('contains')).toBe(true);
+    expect(isFlowMatchType('startsWith')).toBe(false);
+  });
   it('matches equals case-insensitively', () => {
     expect(
       replyMatchesEdge('  Día Completo ', {

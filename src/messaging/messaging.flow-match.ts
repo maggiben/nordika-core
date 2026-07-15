@@ -9,6 +9,10 @@ export function normalizeReplyText(value: string): string {
   return value.trim().toLowerCase();
 }
 
+export function isFlowMatchType(value: string): value is FlowMatchType {
+  return value === 'equals' || value === 'contains';
+}
+
 export function replyMatchesEdge(
   replyBody: string,
   match: FlowEdgeMatch,

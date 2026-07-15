@@ -694,19 +694,6 @@ export class MessagingService {
       active: dto.active ?? true,
     });
     await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.catalog]);
-    if (assignedContactId && this.evolution.isConfigured()) {
-      try {
-        await this.sendCatalogMessage(String(created._id), {
-          contactId: String(assignedContactId),
-        });
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : 'Unknown send error';
-        this.logger.warn(
-          `Auto-send failed for catalog ${String(created._id)}: ${message}`,
-        );
-      }
-    }
     return this.toCatalogRow(created);
   }
 
@@ -763,17 +750,6 @@ export class MessagingService {
     contactId: string,
   ): Promise<StaffCatalogRow> {
     await this.updateCatalogMessage(id, { assignedContactId: contactId });
-    if (contactId.trim() && this.evolution.isConfigured()) {
-      try {
-        await this.sendCatalogMessage(id, { contactId });
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : 'Unknown send error';
-        this.logger.warn(
-          `Auto-send failed after assigning catalog ${id}: ${message}`,
-        );
-      }
-    }
     const refreshed = await this.catalog
       .findById(this.toObjectId(id, 'catalog message'))
       .exec();
