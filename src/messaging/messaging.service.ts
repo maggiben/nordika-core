@@ -2227,12 +2227,11 @@ export class MessagingService {
         String(left._id).localeCompare(String(right._id)),
     );
     for (let index = 0; index < siblings.length; index += 1) {
+      const sibling = siblings[index];
       const nextOrder = index + 1;
-      if (siblings[index].sortOrder !== nextOrder) {
-        siblings[index].sortOrder = nextOrder;
-        if (siblings[index].save) {
-          await siblings[index].save();
-        }
+      if (sibling.sortOrder !== nextOrder) {
+        sibling.sortOrder = nextOrder;
+        await sibling.save();
       }
     }
   }
@@ -2264,9 +2263,10 @@ export class MessagingService {
           String(left._id).localeCompare(String(right._id)),
       );
       for (let index = 0; index < list.length; index += 1) {
-        list[index].sortOrder = index + 1;
-        if (list[index].save) {
-          await list[index].save();
+        const item = list[index];
+        item.sortOrder = index + 1;
+        if (item.save) {
+          await item.save();
         }
       }
     }
