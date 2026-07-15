@@ -1382,9 +1382,10 @@ export class MessagingService {
     let catalogFailed = 0;
     let whatsappTriggered = false;
     let whatsappSummaries: WeeklyDispatchSummary[] = [];
-    const projectIds = await this.resolveDispatchProjectIds([
-      ...activeProjectIds,
-    ]);
+    const projectIds =
+      claimed > 0
+        ? await this.resolveDispatchProjectIds([...activeProjectIds])
+        : undefined;
 
     if (claimed > 0 && this.evolution.isConfigured()) {
       if (catalogSlotKey && catalogSlotStart) {
