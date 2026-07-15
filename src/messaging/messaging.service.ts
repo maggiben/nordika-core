@@ -824,9 +824,7 @@ export class MessagingService {
     for (let index = 0; index < orderedIds.length; index += 1) {
       const item = byId.get(orderedIds[index])!;
       item.sortOrder = index + 1;
-      if (item.save) {
-        await item.save();
-      }
+      await item.save();
     }
     await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.catalog]);
     return this.listCatalogMessages();
@@ -2265,9 +2263,7 @@ export class MessagingService {
       for (let index = 0; index < list.length; index += 1) {
         const item = list[index];
         item.sortOrder = index + 1;
-        if (item.save) {
-          await item.save();
-        }
+        await item.save();
       }
     }
   }
