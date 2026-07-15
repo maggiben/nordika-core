@@ -243,6 +243,41 @@ export function computeNextSendDates(
   return results;
 }
 
+/** True when `from` falls in the exact local minute configured for the schedule. */
+export function isScheduleDueAt(
+  schedule: EmailNotificationSchedule,
+  from = new Date(),
+): boolean {
+  if (!schedule.enabled) {
+    return false;
+  }
+
+  const timeZone = schedule.timezone || DEFAULT_SCHEDULE.timezone;
+  const parts = readZonedParts(from, timeZone);
+  const [hours, minutes] = schedule.sendTime.split(':').map(Number);
+
+  if (parts.hour !== hours || parts.minute !== minutes) {
+    return false;
+  }
+
+  if (schedule.frequency === 'weekly') {
+    return schedule.daysOfWeek.includes(parts.weekday);
+  }
+
+  return parts.day === schedule.dayOfMonth;
+}
+
+/** Stable slot id used to claim a scheduled send at most once. */
+export function notificationSlotKey(
+  schedule: EmailNotificationSchedule,
+  from = new Date(),
+): string {
+  const timeZone = schedule.timezone || DEFAULT_SCHEDULE.timezone;
+  const parts = readZonedParts(from, timeZone);
+  const date = `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
+  return `${date}T${schedule.sendTime}|${timeZone}|${schedule.frequency}`;
+}
+
 @Injectable()
 export class AccountService {
   constructor(

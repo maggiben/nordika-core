@@ -16,6 +16,8 @@ export interface Account {
   roles: string[];
   language?: string;
   emailNotificationSchedule?: EmailNotificationSchedule;
+  /** Dedup key for the last scheduled notification slot that was claimed. */
+  lastNotificationSlot?: string;
 }
 export interface LocalCredential {
   accountId: Types.ObjectId;
@@ -81,6 +83,7 @@ export const accountSchema = new Schema<Account>(
         default: 'America/Argentina/Buenos_Aires',
       },
     },
+    lastNotificationSlot: { type: String },
   },
   { timestamps: true },
 );

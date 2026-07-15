@@ -17,12 +17,13 @@
   password-reset email. `RESEND_FROM` must be a Resend-verified sender.
 - `EVOLUTION_API_URL`, `EVOLUTION_API_KEY`, and `EVOLUTION_INSTANCE` are optional
   as a group. When set, weekly WhatsApp status dispatch can send through
-  Evolution. `WHATSAPP_WEEKLY_CRON` (default `0 9 * * 1`) and
-  `WHATSAPP_TIMEZONE` (default `America/Argentina/Buenos_Aires`) control the
-  scheduler. `WHATSAPP_DEFAULT_LANGUAGE` (`es`|`en`, default `es`) is used when
+  Evolution. Scheduled follow-up emails and WhatsApp weekly dispatch are driven
+  by each account's `emailNotificationSchedule` (timezone, days, send time) via
+  a minute job — not by `WHATSAPP_WEEKLY_CRON` / `WHATSAPP_TIMEZONE` (deprecated,
+  ignored). `WHATSAPP_DEFAULT_LANGUAGE` (`es`|`en`, default `es`) is used when
   a WhatsApp contact has no language set. Editable message copy lives in
-  `locales/whatsapp/{es,en}.json`. Account language is configured from the
-  frontend via `PATCH /account/settings`.
+  `locales/whatsapp/{es,en}.json`. Account language and notification schedule
+  are configured from the frontend via `PATCH /account/settings`.
 
 `MongoModule` activates Mongoose only when one of the MongoDB URL variables is configured. The value must begin with `mongodb://` or `mongodb+srv://`; the application does not log the URL. Authentication requires MongoDB plus non-empty `JWT_SECRET`, `APP_URL`, `RESEND_API_KEY`, and `RESEND_FROM`. Messaging routes register only when MongoDB is configured; WhatsApp sending additionally requires the Evolution variables. On Railway, `EVOLUTION_API_URL` must point at the Evolution service (prefer the private hostname, e.g. `http://evolution-api.railway.internal:8080`), not `localhost`. Configure these values in a secure secret store, never in committed `.env` files.
 

@@ -13,8 +13,11 @@ export interface Environment {
   REDIS_URL?: string;
   RESEND_API_KEY?: string;
   RESEND_FROM?: string;
+  RESEND_TO?: string;
   WHATSAPP_DEFAULT_LANGUAGE?: string;
+  /** @deprecated Unused; schedules use account emailNotificationSchedule. */
   WHATSAPP_TIMEZONE?: string;
+  /** @deprecated Unused; schedules use account emailNotificationSchedule. */
   WHATSAPP_WEEKLY_CRON?: string;
 }
 

@@ -2,7 +2,9 @@ import { NotFoundException } from '@nestjs/common';
 import {
   AccountService,
   computeNextSendDates,
+  isScheduleDueAt,
   normalizeSchedule,
+  notificationSlotKey,
 } from './account.service';
 
 describe('account schedule helpers', () => {
@@ -125,6 +127,46 @@ describe('account schedule helpers', () => {
       '2026-07-16T12:00:00.000Z', // Thu this week
       '2026-07-20T12:00:00.000Z', // Mon next week
     ]);
+  });
+
+  it('detects the due minute in the schedule timezone', () => {
+    const schedule = {
+      enabled: true,
+      frequency: 'weekly' as const,
+      daysOfWeek: [3],
+      dayOfMonth: 1,
+      sendTime: '09:00',
+      timezone: 'America/Argentina/Buenos_Aires',
+    };
+    const due = new Date('2026-07-15T12:00:00.000Z');
+    const later = new Date('2026-07-15T12:01:00.000Z');
+    expect(isScheduleDueAt(schedule, due)).toBe(true);
+    expect(isScheduleDueAt(schedule, later)).toBe(false);
+    expect(notificationSlotKey(schedule, due)).toBe(
+      '2026-07-15T09:00|America/Argentina/Buenos_Aires|weekly',
+    );
+    expect(
+      isScheduleDueAt(
+        {
+          ...schedule,
+          enabled: false,
+        },
+        due,
+      ),
+    ).toBe(false);
+    expect(
+      isScheduleDueAt(
+        {
+          enabled: true,
+          frequency: 'monthly',
+          daysOfWeek: [1],
+          dayOfMonth: 15,
+          sendTime: '09:00',
+          timezone: 'America/Argentina/Buenos_Aires',
+        },
+        due,
+      ),
+    ).toBe(true);
   });
 });
 

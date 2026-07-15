@@ -1,6 +1,7 @@
 import { DynamicModule, Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ScheduleModule } from '@nestjs/schedule';
+import { ACCOUNT_MODEL, accountSchema } from '../auth/auth.schema';
 import { LocaleService } from '../i18n/locale.service';
 import { getMongoUri } from '../mongo/mongo.config';
 import { EvolutionClient } from './evolution.client';
@@ -47,6 +48,7 @@ export class MessagingModule {
             name: STAFF_CATALOG_MESSAGE_MODEL,
             schema: staffCatalogMessageSchema,
           },
+          { name: ACCOUNT_MODEL, schema: accountSchema },
         ]),
       ],
       controllers: [MessagingController, MessagingWebhookController],

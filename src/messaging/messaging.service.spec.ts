@@ -1,3 +1,11 @@
+const sendEmail = jest.fn(() => Promise.resolve({ id: 'email-1' }));
+
+jest.mock('resend', () => ({
+  Resend: jest.fn().mockImplementation(() => ({
+    emails: { send: sendEmail },
+  })),
+}));
+
 import {
   BadRequestException,
   NotFoundException,
@@ -81,23 +89,27 @@ function createModelMock<T extends object>() {
     findOneAndUpdate: jest.fn(
       (
         filter: Record<string, unknown>,
-        update: Partial<T>,
+        update: Record<string, unknown>,
         options: { upsert?: boolean } = {},
       ) => ({
         exec: () => {
           const index = store.findIndex((item) => matches(item, filter));
+          const patch =
+            update.$set && typeof update.$set === 'object'
+              ? (update.$set as Partial<T>)
+              : (update as Partial<T>);
           if (index < 0) {
             if (!options.upsert) {
               return Promise.resolve(null);
             }
             const created = {
-              ...update,
+              ...patch,
               _id: new Types.ObjectId(),
             } as LeanDoc<T>;
             store.push(created);
             return Promise.resolve(created);
           }
-          store[index] = { ...store[index], ...update };
+          store[index] = { ...store[index], ...patch };
           return Promise.resolve(store[index]);
         },
       }),
@@ -113,12 +125,43 @@ function createModelMock<T extends object>() {
   };
 }
 
+function getPath(item: Record<string, unknown>, key: string): unknown {
+  if (!key.includes('.')) {
+    return item[key];
+  }
+  return key.split('.').reduce<unknown>((acc, part) => {
+    if (!acc || typeof acc !== 'object') {
+      return undefined;
+    }
+    return (acc as Record<string, unknown>)[part];
+  }, item);
+}
+
 function matches(
   item: Record<string, unknown>,
   filter: Record<string, unknown>,
 ): boolean {
+  if (Array.isArray(filter.$or)) {
+    return filter.$or.some((sub) =>
+      matches(item, sub as Record<string, unknown>),
+    );
+  }
+
   return Object.entries(filter).every(([key, value]) => {
-    const left = item[key];
+    if (key === '$or') {
+      return true;
+    }
+    const left = getPath(item, key);
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const ops = value as Record<string, unknown>;
+      if ('$exists' in ops) {
+        const exists = left !== undefined && left !== null;
+        return ops.$exists ? exists : !exists;
+      }
+      if ('$ne' in ops) {
+        return left !== ops.$ne;
+      }
+    }
     if (left instanceof Types.ObjectId || value instanceof Types.ObjectId) {
       return String(left) === String(value);
     }
@@ -197,6 +240,18 @@ describe('MessagingService', () => {
     assignedContactId?: Types.ObjectId;
     active: boolean;
   }>();
+  const accounts = createModelMock<{
+    email: string;
+    emailNotificationSchedule?: {
+      enabled: boolean;
+      frequency: 'weekly' | 'monthly';
+      daysOfWeek: number[];
+      dayOfMonth: number;
+      sendTime: string;
+      timezone: string;
+    };
+    lastNotificationSlot?: string;
+  }>();
 
   const isConfigured = jest.fn(() => true);
   const sendInteractive = jest.fn(() =>
@@ -226,6 +281,7 @@ describe('MessagingService', () => {
       dispatches,
       messages,
       catalog,
+      accounts,
     ]) {
       model.store.length = 0;
       jest.clearAllMocks();
@@ -234,6 +290,7 @@ describe('MessagingService', () => {
     sendInteractive
       .mockReset()
       .mockImplementation(() => Promise.resolve({ providerMessageId: '1' }));
+    sendEmail.mockReset().mockResolvedValue({ id: 'email-1' });
     invalidatePaths
       .mockReset()
       .mockImplementation(() => Promise.resolve(undefined));
@@ -246,6 +303,7 @@ describe('MessagingService', () => {
       dispatches as never,
       messages as never,
       catalog as never,
+      accounts as never,
       evolution,
       cache,
       locales,
@@ -605,6 +663,116 @@ describe('MessagingService', () => {
     );
     expect(summaries[0]?.failed).toBe(1);
     expect(invalidatePaths).toHaveBeenCalled();
+  });
+
+  it('claims due account slots, emails digests, and triggers WhatsApp', async () => {
+    // Wednesday 15 Jul 2026 09:00 America/Argentina/Buenos_Aires
+    const asOf = new Date('2026-07-15T12:00:00.000Z');
+    await accounts.create({
+      email: 'ops@example.com',
+      emailNotificationSchedule: {
+        enabled: true,
+        frequency: 'weekly',
+        daysOfWeek: [3],
+        dayOfMonth: 1,
+        sendTime: '09:00',
+        timezone: 'America/Argentina/Buenos_Aires',
+      },
+    });
+    await contacts.create({
+      phone: '5491111111111',
+      label: 'Estructura',
+      active: true,
+      tags: ['staff'],
+    });
+
+    const first = await service.runScheduledNotifications(asOf);
+    expect(first.emailsSent).toBe(1);
+    expect(first.whatsappTriggered).toBe(true);
+    expect(sendEmail).toHaveBeenCalled();
+    const payload = sendEmail.mock.calls[0]?.[0] as {
+      to: string[];
+      subject: string;
+    };
+    expect(payload.to).toEqual(['ops@example.com']);
+    expect(payload.subject).toContain('semanal');
+
+    const second = await service.runScheduledNotifications(asOf);
+    expect(second.emailsSent).toBe(0);
+    expect(second.dueAccounts).toBe(0);
+  });
+
+  it('records email failures and skips WhatsApp when Evolution is off', async () => {
+    const asOf = new Date('2026-07-15T12:00:00.000Z');
+    await accounts.create({
+      email: 'ops@example.com',
+      emailNotificationSchedule: {
+        enabled: true,
+        frequency: 'weekly',
+        daysOfWeek: [3],
+        dayOfMonth: 1,
+        sendTime: '09:00',
+        timezone: 'America/Argentina/Buenos_Aires',
+      },
+    });
+    sendEmail.mockRejectedValueOnce(new Error('resend down'));
+    isConfigured.mockReturnValue(false);
+
+    const result = await service.runScheduledNotifications(asOf);
+    expect(result.emailFailures).toBe(1);
+    expect(result.emailsSent).toBe(0);
+    expect(result.whatsappTriggered).toBe(false);
+  });
+
+  it('ignores accounts that are not due this minute', async () => {
+    const asOf = new Date('2026-07-15T12:01:00.000Z');
+    await accounts.create({
+      email: 'ops@example.com',
+      emailNotificationSchedule: {
+        enabled: true,
+        frequency: 'weekly',
+        daysOfWeek: [3],
+        dayOfMonth: 1,
+        sendTime: '09:00',
+        timezone: 'America/Argentina/Buenos_Aires',
+      },
+    });
+
+    const result = await service.runScheduledNotifications(asOf);
+    expect(result.dueAccounts).toBe(0);
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('CCs RESEND_TO and tolerates WhatsApp dispatch failures', async () => {
+    const asOf = new Date('2026-07-15T12:00:00.000Z');
+    process.env.RESEND_TO = 'copy@example.com';
+    await accounts.create({
+      email: 'ops@example.com',
+      emailNotificationSchedule: {
+        enabled: true,
+        frequency: 'monthly',
+        daysOfWeek: [1],
+        dayOfMonth: 15,
+        sendTime: '09:00',
+        timezone: 'America/Argentina/Buenos_Aires',
+      },
+    });
+    jest
+      .spyOn(service, 'runWeeklyStatusDispatch')
+      .mockRejectedValueOnce(new Error('whatsapp down'));
+
+    const result = await service.runScheduledNotifications(asOf);
+    expect(result.emailsSent).toBe(1);
+    expect(result.whatsappTriggered).toBe(false);
+    const payload = sendEmail.mock.calls[0]?.[0] as {
+      to: string[];
+      subject: string;
+      text: string;
+    };
+    expect(payload.to).toEqual(['ops@example.com', 'copy@example.com']);
+    expect(payload.subject).toContain('mensual');
+    expect(payload.text).toContain('Sin contactos');
+    delete process.env.RESEND_TO;
   });
 
   it('ignores ciclos outside the date window', async () => {

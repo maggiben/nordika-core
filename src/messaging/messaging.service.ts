@@ -7,9 +7,19 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { Resend } from 'resend';
+import {
+  isScheduleDueAt,
+  normalizeSchedule,
+  notificationSlotKey,
+} from '../account/account.service';
+import { ACCOUNT_MODEL, AccountDocument } from '../auth/auth.schema';
 import { MESSAGING_CACHE_PATHS } from '../cache/cache.constants';
 import { OptionalCacheService } from '../cache/optional-cache.service';
-import { getWhatsAppDefaultLanguage } from '../config/environment';
+import {
+  getAuthConfig,
+  getWhatsAppDefaultLanguage,
+} from '../config/environment';
 import { LocaleService } from '../i18n/locale.service';
 import { normalizeLanguage } from '../i18n/languages';
 import { EvolutionClient } from './evolution.client';
@@ -100,6 +110,8 @@ export interface StaffCatalogRow {
 export class MessagingService {
   private readonly logger = new Logger(MessagingService.name);
   private readonly replyMatchWindowMs = 7 * 24 * 60 * 60 * 1000;
+  private readonly resend = new Resend(getAuthConfig().resendApiKey);
+  private readonly resendFrom = getAuthConfig().resendFrom;
 
   constructor(
     @InjectModel(WHATSAPP_CONTACT_MODEL)
@@ -116,6 +128,8 @@ export class MessagingService {
     private readonly messages: Model<StaffMessageDocument>,
     @InjectModel(STAFF_CATALOG_MESSAGE_MODEL)
     private readonly catalog: Model<StaffCatalogMessageDocument>,
+    @InjectModel(ACCOUNT_MODEL)
+    private readonly accounts: Model<AccountDocument>,
     private readonly evolution: EvolutionClient,
     private readonly cache: OptionalCacheService,
     private readonly locales: LocaleService,
@@ -1010,6 +1024,89 @@ export class MessagingService {
     };
   }
 
+  /**
+   * Minute job entry: claim due account schedule slots, email digests, then
+   * run WhatsApp weekly status once when at least one slot was claimed.
+   */
+  async runScheduledNotifications(asOf: Date = new Date()): Promise<{
+    dueAccounts: number;
+    emailsSent: number;
+    emailFailures: number;
+    whatsappTriggered: boolean;
+    whatsappSummaries: WeeklyDispatchSummary[];
+  }> {
+    const accounts = await this.accounts
+      .find({ 'emailNotificationSchedule.enabled': true })
+      .exec();
+
+    let emailsSent = 0;
+    let emailFailures = 0;
+    let claimed = 0;
+    const roster = await this.listStaffRoster();
+
+    for (const account of accounts) {
+      const schedule = normalizeSchedule(account.emailNotificationSchedule);
+      if (!isScheduleDueAt(schedule, asOf)) {
+        continue;
+      }
+
+      const slot = notificationSlotKey(schedule, asOf);
+      const claimedAccount = await this.accounts
+        .findOneAndUpdate(
+          {
+            _id: account._id,
+            $or: [
+              { lastNotificationSlot: { $exists: false } },
+              { lastNotificationSlot: { $ne: slot } },
+            ],
+          },
+          { $set: { lastNotificationSlot: slot } },
+          { new: true },
+        )
+        .exec();
+
+      if (!claimedAccount) {
+        continue;
+      }
+
+      claimed += 1;
+      try {
+        await this.sendFollowUpEmail(account.email, roster, schedule.frequency);
+        emailsSent += 1;
+      } catch (error) {
+        emailFailures += 1;
+        this.logger.warn(
+          `Follow-up email failed for ${account.email}: ${
+            error instanceof Error ? error.message : 'unknown error'
+          }`,
+        );
+      }
+    }
+
+    let whatsappTriggered = false;
+    let whatsappSummaries: WeeklyDispatchSummary[] = [];
+    if (claimed > 0 && this.evolution.isConfigured()) {
+      try {
+        whatsappSummaries = await this.runWeeklyStatusDispatch(asOf);
+        whatsappTriggered = true;
+      } catch (error) {
+        this.logger.warn(
+          `WhatsApp scheduled dispatch skipped: ${
+            error instanceof Error ? error.message : 'unknown error'
+          }`,
+        );
+      }
+    }
+
+    return {
+      dueAccounts: claimed,
+      emailsSent,
+      emailFailures,
+      whatsappTriggered,
+      whatsappSummaries,
+    };
+  }
+
   async runWeeklyStatusDispatch(
     asOf: Date = new Date(),
   ): Promise<WeeklyDispatchSummary[]> {
@@ -1168,6 +1265,48 @@ export class MessagingService {
     ]);
 
     return summaries;
+  }
+
+  private async sendFollowUpEmail(
+    email: string,
+    roster: StaffRosterRow[],
+    frequency: 'weekly' | 'monthly',
+  ): Promise<void> {
+    const period = frequency === 'monthly' ? 'mensual' : 'semanal';
+    const lines =
+      roster.length === 0
+        ? ['Sin contactos de staff activos.']
+        : roster.map((row) => {
+            const name = row.label ?? row.phone;
+            const sent = row.lastSentAt
+              ? `último envío ${row.lastSentAt}`
+              : 'sin envíos';
+            const reply = row.lastReceivedAt
+              ? `última respuesta ${row.lastReceivedAt}`
+              : 'sin respuesta';
+            return `- ${name} (${row.phone}): ${sent}; ${reply}`;
+          });
+
+    const text = [
+      `Resumen ${period} de equipo Nodika`,
+      '',
+      ...lines,
+      '',
+      'Abrí Staff en la app para más detalle.',
+    ].join('\n');
+
+    const to = [email];
+    const extra = process.env.RESEND_TO?.trim();
+    if (extra && extra.includes('@') && extra.toLowerCase() !== email) {
+      to.push(extra);
+    }
+
+    await this.resend.emails.send({
+      from: this.resendFrom,
+      to,
+      subject: `Nodika — seguimiento ${period}`,
+      text,
+    });
   }
 
   private async assertTemplateExists(templateKey: string): Promise<void> {
