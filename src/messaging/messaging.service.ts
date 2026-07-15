@@ -1030,6 +1030,10 @@ export class MessagingService {
       getWhatsAppDefaultLanguage(),
     );
 
+    const outboundProjectId =
+      (await this.resolvePreferredAskProjectId(contact)) ??
+      normalizeContactProjectIds(contact)[0];
+
     try {
       const result = await this.evolution.sendInteractive(
         contact.phone,
@@ -1050,9 +1054,7 @@ export class MessagingService {
         receivedAt: sentAt,
         responseStatus: 'pending',
         source: 'catalog',
-        ...(normalizeContactProjectIds(contact)[0]
-          ? { projectId: normalizeContactProjectIds(contact)[0] }
-          : {}),
+        ...(outboundProjectId ? { projectId: outboundProjectId } : {}),
       });
       if (!catalogMessage.assignedContactId) {
         catalogMessage.assignedContactId = contact._id;
@@ -1087,9 +1089,7 @@ export class MessagingService {
         sentAt,
         source: 'catalog',
         responseStatus: 'neutral',
-        ...(normalizeContactProjectIds(contact)[0]
-          ? { projectId: normalizeContactProjectIds(contact)[0] }
-          : {}),
+        ...(outboundProjectId ? { projectId: outboundProjectId } : {}),
       });
       throw error;
     }
@@ -2185,14 +2185,34 @@ export class MessagingService {
       allowRestart: false,
       slotStart,
     });
-    if (sequence.awaitingReply) {
-      return;
-    }
+    const justAnswered =
+      Boolean(openThread.repliedAt) &&
+      this.isMeaningfulCatalogInboundBody(openThread.replyBody ?? '');
+
     if (!sequence.next) {
-      await this.tryStartTaskChecklistForContact(lead);
+      const preferred = await this.resolvePreferredAskProjectId(lead);
+      await this.tryStartTaskChecklistForContact(lead, preferred, {
+        afterCatalogReply: true,
+      });
       return;
     }
-    if (String(sequence.next._id) === String(current._id)) {
+
+    // Same catalog step still open according to resolve — if this inbound just
+    // answered it, start objective-task asks instead of waiting forever.
+    if (
+      String(sequence.next._id) === String(current._id) &&
+      (sequence.awaitingReply || justAnswered)
+    ) {
+      if (justAnswered) {
+        const preferred = await this.resolvePreferredAskProjectId(lead);
+        await this.tryStartTaskChecklistForContact(lead, preferred, {
+          afterCatalogReply: true,
+        });
+      }
+      return;
+    }
+
+    if (sequence.awaitingReply) {
       return;
     }
 
@@ -2317,17 +2337,23 @@ export class MessagingService {
   private async tryStartTaskChecklistForContact(
     contact: WhatsAppContactDocument,
     preferredProjectId?: string,
+    options: { afterCatalogReply?: boolean } = {},
   ): Promise<void> {
     const slotKey = contact.catalogSlotKey;
     if (!slotKey) {
+      this.logger.warn(
+        `Task checklist skipped for ${contact.phone}: missing catalogSlotKey`,
+      );
       return;
     }
-    const sequence = await this.resolveNextCatalogSend(contact._id, {
-      allowRestart: false,
-      slotStart: contact.catalogSlotStartAt ?? undefined,
-    });
-    if (sequence.next) {
-      return;
+    if (!options.afterCatalogReply) {
+      const sequence = await this.resolveNextCatalogSend(contact._id, {
+        allowRestart: false,
+        slotStart: contact.catalogSlotStartAt ?? undefined,
+      });
+      if (sequence.next) {
+        return;
+      }
     }
     await this.sendNextTaskChecklistAsk(contact, slotKey, preferredProjectId);
   }
@@ -2345,10 +2371,15 @@ export class MessagingService {
     let projectId: string | undefined =
       (preferredProjectId && membership.includes(preferredProjectId)
         ? preferredProjectId
-        : undefined) ?? membership[0];
+        : undefined) ??
+      (await this.resolvePreferredAskProjectId(contact)) ??
+      membership[0];
     if (!projectId) {
       const newest = await this.resolveNewestSourceProjectId();
       if (!newest) {
+        this.logger.warn(
+          `Task checklist skipped for ${contact.phone}: no projectId available`,
+        );
         return;
       }
       projectId = newest;
@@ -2374,15 +2405,24 @@ export class MessagingService {
       })
       .exec();
     if (openAsk) {
+      this.logger.debug(
+        `Task checklist waiting on open ask ${String(openAsk.taskId ?? openAsk._id)} for ${contact.phone}`,
+      );
       return;
     }
 
     const loaded = await this.loadPendingObjectiveTasksForProject(projectId);
     if (!loaded) {
+      this.logger.warn(
+        `Task checklist skipped for ${contact.phone}: no source for project ${projectId}`,
+      );
       return;
     }
     const { sourceId, tasks, projectName } = loaded;
     if (tasks.length === 0) {
+      this.logger.warn(
+        `Task checklist skipped for ${contact.phone}: no pending tasks in project ${projectId}`,
+      );
       return;
     }
 
@@ -2393,6 +2433,7 @@ export class MessagingService {
         direction: 'outbound',
         source: 'task_checklist',
         status: 'sent',
+        repliedAt: { $exists: true },
       })
       .exec();
     const doneIds = new Set(
@@ -2400,6 +2441,9 @@ export class MessagingService {
     );
     const nextIndex = tasks.findIndex((task) => !doneIds.has(task.taskId));
     if (nextIndex < 0) {
+      this.logger.debug(
+        `Task checklist complete for ${contact.phone} slot ${slotKey}`,
+      );
       return;
     }
     const task = tasks[nextIndex];
@@ -2740,6 +2784,28 @@ export class MessagingService {
     }
     const inboundBody = (inbound.body ?? '').trim();
     return this.isMeaningfulCatalogInboundBody(inboundBody);
+  }
+
+  /** Prefer account active obra that the contact belongs to. */
+  private async resolvePreferredAskProjectId(
+    contact: WhatsAppContactDocument,
+  ): Promise<string | undefined> {
+    const membership = normalizeContactProjectIds(contact);
+    if (membership.length === 0) {
+      return undefined;
+    }
+    const accounts = await this.accounts
+      .find({
+        activeProjectId: { $exists: true, $ne: null },
+      })
+      .exec();
+    for (const account of accounts) {
+      const active = account.activeProjectId?.trim();
+      if (active && membership.includes(active)) {
+        return active;
+      }
+    }
+    return membership[0];
   }
 
   /**

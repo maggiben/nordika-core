@@ -2196,12 +2196,17 @@ describe('MessagingService', () => {
   });
 
   it('asks pending objective tasks after catalog is complete and advances on reply', async () => {
+    await accounts.create({
+      email: 'ops@example.com',
+      activeProjectId: ACTIVE_PROJECT,
+    });
     const lead = await contacts.create({
       phone: '5491138911794',
       label: 'Benjamin',
       active: true,
       tags: ['staff'],
-      projectId: ACTIVE_PROJECT,
+      projectIds: ['proj_other', ACTIVE_PROJECT],
+      projectId: 'proj_other',
       catalogSlotKey: '2026-07-15T09:00|America/Argentina/Buenos_Aires|weekly',
       catalogSlotStartAt: new Date('2026-07-15T12:00:00.000Z'),
     });
@@ -2209,6 +2214,14 @@ describe('MessagingService', () => {
       title: 'Performance del equipo',
       body: 'Performance',
       assignedContactId: String(lead._id),
+    });
+    await sources.create({
+      filename: 'other.json',
+      projectId: 'proj_other',
+      content: {
+        meta: { projectId: 'proj_other', projectNombre: 'Otra' },
+        tareas_con_objetivo: [],
+      },
     });
     await sources.create({
       filename: 'obra.json',
@@ -2342,6 +2355,70 @@ describe('MessagingService', () => {
     ).toHaveLength(0);
   });
 
+  it('forces task kickoff after catalog reply even if catalog sequence still open', async () => {
+    await accounts.create({
+      email: 'force@example.com',
+      activeProjectId: ACTIVE_PROJECT,
+    });
+    const lead = await contacts.create({
+      phone: '5491138911799',
+      label: 'Force',
+      active: true,
+      tags: ['staff'],
+      projectIds: [ACTIVE_PROJECT],
+      projectId: ACTIVE_PROJECT,
+      catalogSlotKey: 'slot-force',
+      catalogSlotStartAt: new Date('2026-07-15T12:00:00.000Z'),
+    });
+    const catalogMsg = await service.createCatalogMessage({
+      title: 'Avance',
+      body: '¿Cómo va?',
+      assignedContactId: String(lead._id),
+    });
+    await sources.create({
+      filename: 'obra.json',
+      projectId: ACTIVE_PROJECT,
+      content: {
+        meta: { projectId: ACTIVE_PROJECT, projectNombre: 'Pier' },
+        tareas_con_objetivo: [
+          { id: 'carp', label: 'colocacion carpinterias', avance_base: 20 },
+        ],
+      },
+    });
+    await service.sendCatalogMessage(String(catalogMsg._id), undefined, {
+      catalogSlotStart: lead.catalogSlotStartAt,
+    });
+    sendInteractive.mockClear();
+    await (
+      service as unknown as {
+        tryStartTaskChecklistForContact: (
+          contact: (typeof contacts.store)[0],
+          preferred?: string,
+          options?: { afterCatalogReply?: boolean },
+        ) => Promise<void>;
+      }
+    ).tryStartTaskChecklistForContact(lead, ACTIVE_PROJECT, {
+      afterCatalogReply: true,
+    });
+    expect(sendInteractive).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        sendInteractive.mock.calls[0] as unknown as [string, { title?: string }]
+      )[1].title,
+    ).toContain('Pier · Tarea 1/1');
+
+    sendInteractive.mockClear();
+    await (
+      service as unknown as {
+        sendNextTaskChecklistAsk: (
+          contact: (typeof contacts.store)[0],
+          slotKey: string,
+        ) => Promise<void>;
+      }
+    ).sendNextTaskChecklistAsk(lead, 'slot-force');
+    expect(sendInteractive).not.toHaveBeenCalled();
+  });
+
   it('ignores ack-like replies for open task checklist asks', async () => {
     const lead = await contacts.create({
       phone: '5491138911796',
@@ -2407,6 +2484,29 @@ describe('MessagingService', () => {
     ).toHaveLength(0);
 
     isConfigured.mockReturnValue(true);
+    const orphan = await contacts.create({
+      phone: '5491138911801',
+      label: 'Orphan',
+      active: true,
+      tags: ['staff'],
+      projectId: 'proj_missing_source',
+      catalogSlotKey: 'slot-orphan',
+      catalogSlotStartAt: new Date('2026-07-15T12:00:00.000Z'),
+    });
+    await (
+      service as unknown as {
+        sendNextTaskChecklistAsk: (
+          contact: (typeof contacts.store)[0],
+          slotKey: string,
+        ) => Promise<void>;
+      }
+    ).sendNextTaskChecklistAsk(orphan, 'slot-orphan');
+    expect(
+      messages.store.filter(
+        (row) => row.source === 'task_checklist' && row.phone === orphan.phone,
+      ),
+    ).toHaveLength(0);
+
     await sources.create({
       filename: 'empty.json',
       content: {

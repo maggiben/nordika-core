@@ -10,6 +10,8 @@
 - [x] 2.2 Legacy stamp adds to `projectIds` (not only singular field)
 - [x] 2.3 Task checklist requires active project ∈ contact membership
 - [x] 2.4 Task checklist title/body include `meta.projectNombre` (fallback `projectId`)
+- [x] 2.5 After catalog reply, force task kickoff on active obra (not membership[0])
+- [x] 2.6 Count only answered task asks as done; log checklist skip reasons
 
 ## 3. Frontend
 
