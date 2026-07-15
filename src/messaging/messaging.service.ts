@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -30,21 +31,30 @@ import {
   CreateTemplateDto,
   InboundMessageDto,
   SendCatalogMessageDto,
+  StartFlowDto,
   TestSendDto,
   UpdateCatalogMessageDto,
   UpdateCicloDto,
   UpdateContactDto,
   UpdateTemplateDto,
+  UpsertFlowDto,
   UpsertWorkStatusDto,
 } from './messaging.dto';
+import { FLOW_STEP_CAP, pickMatchingEdge } from './messaging.flow-match';
+import { assertValidFlowGraph } from './messaging.flow-validate';
 import {
   CICLO_MODEL,
   CicloDocument,
   InteractiveTemplateBody,
   MESSAGE_DISPATCH_MODEL,
+  MESSAGE_FLOW_MODEL,
+  MESSAGE_FLOW_RUN_MODEL,
   MESSAGE_TEMPLATE_MODEL,
   MessageDispatch,
   MessageDispatchDocument,
+  MessageFlowDocument,
+  MessageFlowNode,
+  MessageFlowRunDocument,
   MessageTemplate,
   MessageTemplateDocument,
   STAFF_CATALOG_MESSAGE_MODEL,
@@ -106,6 +116,30 @@ export interface StaffCatalogRow {
   responseStatus: string;
 }
 
+export interface MessageFlowRow {
+  _id: string;
+  name: string;
+  active: boolean;
+  startNodeId: string;
+  nodes: MessageFlowNode[];
+  edges: Array<{
+    id: string;
+    fromNodeId: string;
+    toNodeId: string;
+    match: { type: 'equals' | 'contains'; value: string };
+  }>;
+}
+
+export interface MessageFlowRunRow {
+  _id: string;
+  flowId: string;
+  contactId: string;
+  currentNodeId: string;
+  status: 'idle' | 'awaiting_reply' | 'completed' | 'failed';
+  stepCount: number;
+  lastOutboundMessageId: string | null;
+}
+
 @Injectable()
 export class MessagingService {
   private readonly logger = new Logger(MessagingService.name);
@@ -128,6 +162,10 @@ export class MessagingService {
     private readonly messages: Model<StaffMessageDocument>,
     @InjectModel(STAFF_CATALOG_MESSAGE_MODEL)
     private readonly catalog: Model<StaffCatalogMessageDocument>,
+    @InjectModel(MESSAGE_FLOW_MODEL)
+    private readonly flows: Model<MessageFlowDocument>,
+    @InjectModel(MESSAGE_FLOW_RUN_MODEL)
+    private readonly flowRuns: Model<MessageFlowRunDocument>,
     @InjectModel(ACCOUNT_MODEL)
     private readonly accounts: Model<AccountDocument>,
     private readonly evolution: EvolutionClient,
@@ -760,6 +798,176 @@ export class MessagingService {
     return { ok: true };
   }
 
+  async listFlows(): Promise<MessageFlowRow[]> {
+    const docs = await this.flows.find({}).sort({ updatedAt: -1 }).exec();
+    return docs.map((doc) => this.toFlowRow(doc));
+  }
+
+  async getFlow(id: string): Promise<MessageFlowRow> {
+    const doc = await this.flows.findById(this.toObjectId(id, 'flow')).exec();
+    if (!doc) {
+      throw new NotFoundException('Flow not found.');
+    }
+    return this.toFlowRow(doc);
+  }
+
+  async createFlow(dto: UpsertFlowDto): Promise<MessageFlowRow> {
+    assertValidFlowGraph(dto);
+    const created = await this.flows.create({
+      name: dto.name.trim(),
+      active: dto.active ?? true,
+      startNodeId: dto.startNodeId.trim(),
+      nodes: dto.nodes,
+      edges: dto.edges,
+    });
+    await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.flows]);
+    return this.toFlowRow(created);
+  }
+
+  async updateFlow(id: string, dto: UpsertFlowDto): Promise<MessageFlowRow> {
+    assertValidFlowGraph(dto);
+    const doc = await this.flows.findById(this.toObjectId(id, 'flow')).exec();
+    if (!doc) {
+      throw new NotFoundException('Flow not found.');
+    }
+    doc.name = dto.name.trim();
+    doc.active = dto.active ?? doc.active;
+    doc.startNodeId = dto.startNodeId.trim();
+    doc.nodes = dto.nodes;
+    doc.edges = dto.edges;
+    if (doc.save) {
+      await doc.save();
+    }
+    await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.flows]);
+    return this.toFlowRow(doc);
+  }
+
+  async deleteFlow(id: string): Promise<{ ok: true }> {
+    const doc = await this.flows.findById(this.toObjectId(id, 'flow')).exec();
+    if (!doc) {
+      throw new NotFoundException('Flow not found.');
+    }
+    doc.active = false;
+    if (doc.save) {
+      await doc.save();
+    }
+    await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.flows]);
+    return { ok: true };
+  }
+
+  async listFlowRuns(contactId?: string): Promise<MessageFlowRunRow[]> {
+    const filter: Record<string, unknown> = {};
+    if (contactId?.trim()) {
+      filter.contactId = this.toObjectId(contactId, 'contact');
+    }
+    const docs = await this.flowRuns
+      .find(filter)
+      .sort({ updatedAt: -1 })
+      .limit(100)
+      .exec();
+    return docs.map((doc) => this.toFlowRunRow(doc));
+  }
+
+  async getFlowRun(id: string): Promise<MessageFlowRunRow> {
+    const doc = await this.flowRuns
+      .findById(this.toObjectId(id, 'flow run'))
+      .exec();
+    if (!doc) {
+      throw new NotFoundException('Flow run not found.');
+    }
+    return this.toFlowRunRow(doc);
+  }
+
+  async startFlow(
+    id: string,
+    dto: StartFlowDto,
+  ): Promise<{
+    ok: true;
+    flowId: string;
+    runId: string;
+    phone: string;
+    threadId: string;
+    providerMessageId?: string;
+  }> {
+    if (!this.evolution.isConfigured()) {
+      throw new ServiceUnavailableException(
+        'WhatsApp messaging is not configured (Evolution API).',
+      );
+    }
+
+    const flow = await this.flows.findById(this.toObjectId(id, 'flow')).exec();
+    if (!flow || !flow.active) {
+      throw new NotFoundException('Flow not found.');
+    }
+    assertValidFlowGraph(flow);
+
+    const contact = await this.contacts
+      .findById(this.toObjectId(dto.contactId, 'contact'))
+      .exec();
+    if (!contact || !contact.active) {
+      throw new NotFoundException('Contact not found.');
+    }
+
+    const existing = await this.flowRuns
+      .findOne({
+        contactId: contact._id,
+        status: 'awaiting_reply',
+      })
+      .exec();
+    if (existing) {
+      throw new ConflictException(
+        'Contact already has an active flow awaiting reply.',
+      );
+    }
+
+    const startNode = flow.nodes.find((node) => node.id === flow.startNodeId);
+    if (!startNode) {
+      throw new BadRequestException('Flow start node is missing.');
+    }
+
+    const run = await this.flowRuns.create({
+      flowId: flow._id,
+      contactId: contact._id,
+      currentNodeId: startNode.id,
+      status: 'awaiting_reply',
+      stepCount: 0,
+    });
+
+    try {
+      const sent = await this.sendFlowNodeMessage({
+        flow,
+        run,
+        contact,
+        node: startNode,
+      });
+      run.stepCount = 1;
+      run.currentNodeId = startNode.id;
+      run.lastOutboundMessageId = sent._id;
+      const outgoing = flow.edges.filter(
+        (edge) => edge.fromNodeId === startNode.id,
+      );
+      run.status = outgoing.length ? 'awaiting_reply' : 'completed';
+      if (run.save) {
+        await run.save();
+      }
+      await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.flows]);
+      return {
+        ok: true,
+        flowId: String(flow._id),
+        runId: String(run._id),
+        phone: contact.phone,
+        threadId: String(sent.threadId ?? sent._id),
+        providerMessageId: sent.providerMessageId,
+      };
+    } catch (error) {
+      run.status = 'failed';
+      if (run.save) {
+        await run.save();
+      }
+      throw error;
+    }
+  }
+
   async sendCatalogMessage(
     id: string,
     dto: SendCatalogMessageDto = {},
@@ -949,7 +1157,7 @@ export class MessagingService {
       .limit(25)
       .exec();
     const windowStart = repliedAt.getTime() - this.replyMatchWindowMs;
-    const openThread = recentOutbound.find((item) => {
+    const openCandidates = recentOutbound.filter((item) => {
       if (item.repliedAt) {
         return false;
       }
@@ -961,6 +1169,10 @@ export class MessagingService {
       }
       return sentAt.getTime() >= windowStart;
     });
+    const openThread =
+      openCandidates.find(
+        (item) => item.source === 'flow' && Boolean(item.flowRunId),
+      ) ?? openCandidates[0];
 
     let responseLatencyMs: number | null = null;
     let responseStatus: StaffResponseTrafficLight | null = null;
@@ -1006,13 +1218,30 @@ export class MessagingService {
       threadId: threadId ?? undefined,
       source: 'webhook',
       catalogMessageId: openThread?.catalogMessageId,
+      flowId: openThread?.flowId,
+      flowRunId: openThread?.flowRunId,
+      flowNodeId: openThread?.flowNodeId,
       title: openThread?.title,
       responseLatencyMs: responseLatencyMs ?? undefined,
       responseStatus: responseStatus ?? undefined,
     });
+
+    if (openThread?.flowRunId) {
+      try {
+        await this.advanceFlowAfterReply(openThread, replyBody);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Unknown flow advance error';
+        this.logger.error(
+          `Failed to advance flow run ${String(openThread.flowRunId)}: ${message}`,
+        );
+      }
+    }
+
     await this.cache.invalidatePaths([
       MESSAGING_CACHE_PATHS.roster,
       MESSAGING_CACHE_PATHS.catalog,
+      MESSAGING_CACHE_PATHS.flows,
     ]);
     return {
       ok: true,
@@ -1497,6 +1726,197 @@ export class MessagingService {
       title: body.title,
       footer: body.footer,
       widgets,
+    };
+  }
+
+  private async advanceFlowAfterReply(
+    outbound: StaffMessageDocument,
+    replyBody: string,
+  ): Promise<void> {
+    if (!outbound.flowRunId) {
+      return;
+    }
+    const run = await this.flowRuns.findById(outbound.flowRunId).exec();
+    if (!run || run.status !== 'awaiting_reply') {
+      return;
+    }
+    const flow = await this.flows.findById(run.flowId).exec();
+    if (!flow || !flow.active) {
+      run.status = 'failed';
+      if (run.save) {
+        await run.save();
+      }
+      return;
+    }
+
+    const fromNodeId = outbound.flowNodeId ?? run.currentNodeId;
+    const outgoing = flow.edges.filter(
+      (edge) => edge.fromNodeId === fromNodeId,
+    );
+    const matched = pickMatchingEdge(replyBody, outgoing);
+    if (!matched) {
+      return;
+    }
+
+    if (run.stepCount >= FLOW_STEP_CAP) {
+      run.status = 'failed';
+      if (run.save) {
+        await run.save();
+      }
+      this.logger.warn(
+        `Flow run ${String(run._id)} hit step cap (${FLOW_STEP_CAP}).`,
+      );
+      return;
+    }
+
+    const nextNode = flow.nodes.find((node) => node.id === matched.toNodeId);
+    if (!nextNode) {
+      run.status = 'failed';
+      if (run.save) {
+        await run.save();
+      }
+      return;
+    }
+
+    const contact = await this.contacts.findById(run.contactId).exec();
+    if (!contact || !contact.active) {
+      run.status = 'failed';
+      if (run.save) {
+        await run.save();
+      }
+      return;
+    }
+
+    try {
+      const sent = await this.sendFlowNodeMessage({
+        flow,
+        run,
+        contact,
+        node: nextNode,
+      });
+      run.stepCount += 1;
+      run.currentNodeId = nextNode.id;
+      run.lastOutboundMessageId = sent._id;
+      const nextOutgoing = flow.edges.filter(
+        (edge) => edge.fromNodeId === nextNode.id,
+      );
+      run.status = nextOutgoing.length ? 'awaiting_reply' : 'completed';
+      if (run.save) {
+        await run.save();
+      }
+    } catch (error) {
+      run.status = 'failed';
+      if (run.save) {
+        await run.save();
+      }
+      throw error;
+    }
+  }
+
+  private async sendFlowNodeMessage(input: {
+    flow: MessageFlowDocument;
+    run: MessageFlowRunDocument;
+    contact: WhatsAppContactDocument;
+    node: MessageFlowNode;
+  }): Promise<StaffMessageDocument> {
+    if (!this.evolution.isConfigured()) {
+      throw new ServiceUnavailableException(
+        'WhatsApp messaging is not configured (Evolution API).',
+      );
+    }
+
+    const { flow, run, contact, node } = input;
+    const sentAt = new Date();
+    const interactive: InteractiveTemplateBody = {
+      text: node.body,
+      title: node.title,
+      widgets: [],
+    };
+    const language = normalizeLanguage(
+      contact.language,
+      getWhatsAppDefaultLanguage(),
+    );
+
+    try {
+      const result = await this.evolution.sendInteractive(
+        contact.phone,
+        interactive,
+        node.body,
+        language,
+      );
+      return this.recordStaffMessage({
+        contactId: contact._id,
+        phone: contact.phone,
+        direction: 'outbound',
+        title: node.title,
+        body: node.body,
+        status: 'sent',
+        providerMessageId: result.providerMessageId,
+        sentAt,
+        receivedAt: sentAt,
+        responseStatus: 'pending',
+        source: 'flow',
+        flowId: flow._id,
+        flowRunId: run._id,
+        flowNodeId: node.id,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unknown send error';
+      await this.recordStaffMessage({
+        contactId: contact._id,
+        phone: contact.phone,
+        direction: 'outbound',
+        title: node.title,
+        body: node.body,
+        status: 'failed',
+        error: message,
+        sentAt,
+        source: 'flow',
+        flowId: flow._id,
+        flowRunId: run._id,
+        flowNodeId: node.id,
+        responseStatus: 'neutral',
+      });
+      throw error;
+    }
+  }
+
+  private toFlowRow(doc: MessageFlowDocument): MessageFlowRow {
+    return {
+      _id: String(doc._id),
+      name: doc.name,
+      active: doc.active,
+      startNodeId: doc.startNodeId,
+      nodes: doc.nodes.map((node) => ({
+        id: node.id,
+        title: node.title,
+        body: node.body,
+        position: { x: node.position.x, y: node.position.y },
+      })),
+      edges: doc.edges.map((edge) => ({
+        id: edge.id,
+        fromNodeId: edge.fromNodeId,
+        toNodeId: edge.toNodeId,
+        match: {
+          type: edge.match.type,
+          value: edge.match.value,
+        },
+      })),
+    };
+  }
+
+  private toFlowRunRow(doc: MessageFlowRunDocument): MessageFlowRunRow {
+    return {
+      _id: String(doc._id),
+      flowId: String(doc.flowId),
+      contactId: String(doc.contactId),
+      currentNodeId: doc.currentNodeId,
+      status: doc.status,
+      stepCount: doc.stepCount,
+      lastOutboundMessageId: doc.lastOutboundMessageId
+        ? String(doc.lastOutboundMessageId)
+        : null,
     };
   }
 

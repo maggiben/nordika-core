@@ -23,15 +23,19 @@ import {
   CreateTemplateDto,
   RemindDto,
   SendCatalogMessageDto,
+  StartFlowDto,
   TestSendDto,
   UpdateCatalogMessageDto,
   UpdateCicloDto,
   UpdateContactDto,
   UpdateTemplateDto,
+  UpsertFlowDto,
   UpsertWorkStatusDto,
 } from './messaging.dto';
 import {
   MessagingService,
+  type MessageFlowRow,
+  type MessageFlowRunRow,
   type StaffCatalogRow,
   type WeeklyDispatchSummary,
 } from './messaging.service';
@@ -160,6 +164,62 @@ export class MessagingController {
   @Delete('catalog/:id')
   deleteCatalogMessage(@Param('id') id: string): Promise<{ ok: true }> {
     return this.messaging.deleteCatalogMessage(id);
+  }
+
+  @Get('flows')
+  @CacheTTL(CACHE_TTLS.MESSAGING_DYNAMIC_MS)
+  listFlows(): Promise<MessageFlowRow[]> {
+    return this.messaging.listFlows();
+  }
+
+  @Post('flows')
+  createFlow(@Body() dto: UpsertFlowDto): Promise<MessageFlowRow> {
+    return this.messaging.createFlow(dto);
+  }
+
+  @Get('flows/runs')
+  listFlowRuns(
+    @Query('contactId') contactId?: string,
+  ): Promise<MessageFlowRunRow[]> {
+    return this.messaging.listFlowRuns(contactId);
+  }
+
+  @Get('flows/runs/:runId')
+  getFlowRun(@Param('runId') runId: string): Promise<MessageFlowRunRow> {
+    return this.messaging.getFlowRun(runId);
+  }
+
+  @Get('flows/:id')
+  getFlow(@Param('id') id: string): Promise<MessageFlowRow> {
+    return this.messaging.getFlow(id);
+  }
+
+  @Patch('flows/:id')
+  updateFlow(
+    @Param('id') id: string,
+    @Body() dto: UpsertFlowDto,
+  ): Promise<MessageFlowRow> {
+    return this.messaging.updateFlow(id, dto);
+  }
+
+  @Delete('flows/:id')
+  deleteFlow(@Param('id') id: string): Promise<{ ok: true }> {
+    return this.messaging.deleteFlow(id);
+  }
+
+  @Post('flows/:id/start')
+  startFlow(
+    @Param('id') id: string,
+    @Body() dto: StartFlowDto,
+  ): Promise<{
+    ok: true;
+    flowId: string;
+    runId: string;
+    phone: string;
+    threadId: string;
+    providerMessageId?: string;
+  }> {
+    return this.messaging.startFlow(id, dto);
   }
 
   @Post('test-send')

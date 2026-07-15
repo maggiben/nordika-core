@@ -12,6 +12,8 @@ type MessagingSchemaExports = {
   MESSAGE_DISPATCH_MODEL: string;
   STAFF_MESSAGE_MODEL: string;
   STAFF_CATALOG_MESSAGE_MODEL: string;
+  MESSAGE_FLOW_MODEL: string;
+  MESSAGE_FLOW_RUN_MODEL: string;
   whatsAppContactSchema: Schema;
   messageTemplateSchema: Schema;
   cicloSchema: Schema;
@@ -19,6 +21,8 @@ type MessagingSchemaExports = {
   messageDispatchSchema: Schema;
   staffMessageSchema: Schema;
   staffCatalogMessageSchema: Schema;
+  messageFlowSchema: Schema;
+  messageFlowRunSchema: Schema;
 };
 
 /**
@@ -39,5 +43,7 @@ export function getMessagingModelDefinitions(): ModelDefinition[] {
       name: s.STAFF_CATALOG_MESSAGE_MODEL,
       schema: s.staffCatalogMessageSchema,
     },
+    { name: s.MESSAGE_FLOW_MODEL, schema: s.messageFlowSchema },
+    { name: s.MESSAGE_FLOW_RUN_MODEL, schema: s.messageFlowRunSchema },
   ];
 }

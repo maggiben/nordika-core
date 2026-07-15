@@ -18,6 +18,7 @@ jest.mock('resend', () => ({
 
 import {
   BadRequestException,
+  ConflictException,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -25,6 +26,7 @@ import { Types } from 'mongoose';
 import { OptionalCacheService } from '../cache/optional-cache.service';
 import { LocaleService } from '../i18n/locale.service';
 import { EvolutionClient } from './evolution.client';
+import { FLOW_STEP_CAP } from './messaging.flow-match';
 import { MessagingService } from './messaging.service';
 
 type LeanDoc<T> = T & {
@@ -242,6 +244,9 @@ describe('MessagingService', () => {
     responseLatencyMs?: number;
     responseStatus?: string;
     catalogMessageId?: Types.ObjectId;
+    flowId?: Types.ObjectId;
+    flowRunId?: Types.ObjectId;
+    flowNodeId?: string;
     threadId?: Types.ObjectId;
     title?: string;
     source?: string;
@@ -251,6 +256,31 @@ describe('MessagingService', () => {
     body: string;
     assignedContactId?: Types.ObjectId;
     active: boolean;
+  }>();
+  const flows = createModelMock<{
+    name: string;
+    active: boolean;
+    startNodeId: string;
+    nodes: Array<{
+      id: string;
+      title: string;
+      body: string;
+      position: { x: number; y: number };
+    }>;
+    edges: Array<{
+      id: string;
+      fromNodeId: string;
+      toNodeId: string;
+      match: { type: 'equals' | 'contains'; value: string };
+    }>;
+  }>();
+  const flowRuns = createModelMock<{
+    flowId: Types.ObjectId;
+    contactId: Types.ObjectId;
+    currentNodeId: string;
+    status: string;
+    stepCount: number;
+    lastOutboundMessageId?: Types.ObjectId;
   }>();
   const accounts = createModelMock<{
     email: string;
@@ -293,6 +323,8 @@ describe('MessagingService', () => {
       dispatches,
       messages,
       catalog,
+      flows,
+      flowRuns,
       accounts,
     ]) {
       model.store.length = 0;
@@ -315,6 +347,8 @@ describe('MessagingService', () => {
       dispatches as never,
       messages as never,
       catalog as never,
+      flows as never,
+      flowRuns as never,
       accounts as never,
       evolution,
       cache,
@@ -1026,5 +1060,310 @@ describe('MessagingService', () => {
         data: { key: { fromMe: true, remoteJid: 'x' } },
       }),
     ).toBeNull();
+  });
+
+  it('starts a flow, advances on matching reply, and rejects a second active run', async () => {
+    const contact = await contacts.create({
+      phone: '5491199887766',
+      label: 'Jefe',
+      active: true,
+      tags: ['staff'],
+      language: 'es',
+    });
+    const flow = await flows.create({
+      name: 'Asistencia',
+      active: true,
+      startNodeId: 'ask',
+      nodes: [
+        {
+          id: 'ask',
+          title: 'Asistencia',
+          body: '¿Cómo fue?',
+          position: { x: 0, y: 0 },
+        },
+        {
+          id: 'thanks',
+          title: 'Gracias',
+          body: 'Recibido',
+          position: { x: 200, y: 0 },
+        },
+      ],
+      edges: [
+        {
+          id: 'e1',
+          fromNodeId: 'ask',
+          toNodeId: 'thanks',
+          match: { type: 'equals', value: 'día completo' },
+        },
+      ],
+    });
+
+    const listed = await service.listFlows();
+    expect(listed.some((item) => item._id === String(flow._id))).toBe(true);
+    expect((await service.getFlow(String(flow._id))).name).toBe('Asistencia');
+
+    const created = await service.createFlow({
+      name: 'Nuevo',
+      startNodeId: 'n1',
+      nodes: [
+        {
+          id: 'n1',
+          title: 'Hola',
+          body: 'Mensaje',
+          position: { x: 0, y: 0 },
+        },
+      ],
+      edges: [],
+    });
+    expect(created.name).toBe('Nuevo');
+
+    const updated = await service.updateFlow(String(flow._id), {
+      name: 'Asistencia v2',
+      active: true,
+      startNodeId: 'ask',
+      nodes: flow.nodes,
+      edges: flow.edges,
+    });
+    expect(updated.name).toBe('Asistencia v2');
+
+    const started = await service.startFlow(String(flow._id), {
+      contactId: String(contact._id),
+    });
+    expect(started.ok).toBe(true);
+    expect(sendInteractive).toHaveBeenCalledTimes(1);
+    expect(flowRuns.store[0]?.status).toBe('awaiting_reply');
+    expect(messages.store[0]?.source).toBe('flow');
+
+    const runs = await service.listFlowRuns(String(contact._id));
+    expect(runs).toHaveLength(1);
+    expect((await service.getFlowRun(String(runs[0]._id))).status).toBe(
+      'awaiting_reply',
+    );
+
+    await expect(
+      service.startFlow(String(flow._id), {
+        contactId: String(contact._id),
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    await service.recordInboundMessage({
+      phone: contact.phone,
+      body: 'Día Completo',
+    });
+    expect(sendInteractive).toHaveBeenCalledTimes(2);
+    expect(flowRuns.store[0]?.currentNodeId).toBe('thanks');
+    expect(flowRuns.store[0]?.status).toBe('completed');
+    expect(flowRuns.store[0]?.stepCount).toBe(2);
+
+    await service.deleteFlow(String(created._id));
+    expect((await service.getFlow(String(created._id))).active).toBe(false);
+  });
+
+  it('keeps awaiting_reply when reply does not match and fails at step cap', async () => {
+    const contact = await contacts.create({
+      phone: '5491100112233',
+      label: 'Jefe 2',
+      active: true,
+      tags: ['staff'],
+      language: 'es',
+    });
+    const flow = await flows.create({
+      name: 'Loop',
+      active: true,
+      startNodeId: 'a',
+      nodes: [
+        {
+          id: 'a',
+          title: 'A',
+          body: 'A?',
+          position: { x: 0, y: 0 },
+        },
+        {
+          id: 'b',
+          title: 'B',
+          body: 'B',
+          position: { x: 100, y: 0 },
+        },
+      ],
+      edges: [
+        {
+          id: 'e1',
+          fromNodeId: 'a',
+          toNodeId: 'b',
+          match: { type: 'contains', value: 'si' },
+        },
+      ],
+    });
+
+    await service.startFlow(String(flow._id), {
+      contactId: String(contact._id),
+    });
+    const sendCountAfterStart = sendInteractive.mock.calls.length;
+
+    await service.recordInboundMessage({
+      phone: contact.phone,
+      body: 'no',
+    });
+    expect(sendInteractive.mock.calls.length).toBe(sendCountAfterStart);
+    expect(flowRuns.store[0]?.status).toBe('awaiting_reply');
+
+    flowRuns.store[0].stepCount = FLOW_STEP_CAP;
+    messages.store[0].repliedAt = undefined;
+    messages.store[0].replyBody = undefined;
+
+    await service.recordInboundMessage({
+      phone: contact.phone,
+      body: 'si dale',
+    });
+    expect(sendInteractive.mock.calls.length).toBe(sendCountAfterStart);
+    expect(flowRuns.store[0]?.status).toBe('failed');
+  });
+
+  it('rejects missing flow resources and unconfigured messaging for start', async () => {
+    const missing = new Types.ObjectId().toHexString();
+    await expect(service.getFlow(missing)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    await expect(
+      service.updateFlow(missing, {
+        name: 'x',
+        startNodeId: 'a',
+        nodes: [
+          {
+            id: 'a',
+            title: 'A',
+            body: 'B',
+            position: { x: 0, y: 0 },
+          },
+        ],
+        edges: [],
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.deleteFlow(missing)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    await expect(service.getFlowRun(missing)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+
+    const inactive = await flows.create({
+      name: 'off',
+      active: false,
+      startNodeId: 'a',
+      nodes: [
+        {
+          id: 'a',
+          title: 'A',
+          body: 'B',
+          position: { x: 0, y: 0 },
+        },
+      ],
+      edges: [],
+    });
+    const contact = await contacts.create({
+      phone: '5491177665544',
+      active: true,
+      tags: ['staff'],
+    });
+    await expect(
+      service.startFlow(String(inactive._id), {
+        contactId: String(contact._id),
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    isConfigured.mockReturnValue(false);
+    const active = await flows.create({
+      name: 'on',
+      active: true,
+      startNodeId: 'a',
+      nodes: [
+        {
+          id: 'a',
+          title: 'A',
+          body: 'B',
+          position: { x: 0, y: 0 },
+        },
+      ],
+      edges: [],
+    });
+    await expect(
+      service.startFlow(String(active._id), {
+        contactId: String(contact._id),
+      }),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+  });
+
+  it('completes immediately for single-node flows and marks failed on send errors', async () => {
+    isConfigured.mockReturnValue(true);
+    const contact = await contacts.create({
+      phone: '5491166554433',
+      active: true,
+      tags: ['staff'],
+      language: 'es',
+    });
+    const flow = await flows.create({
+      name: 'One shot',
+      active: true,
+      startNodeId: 'only',
+      nodes: [
+        {
+          id: 'only',
+          title: 'Solo',
+          body: 'Listo',
+          position: { x: 0, y: 0 },
+        },
+      ],
+      edges: [],
+    });
+
+    const started = await service.startFlow(String(flow._id), {
+      contactId: String(contact._id),
+    });
+    expect(started.ok).toBe(true);
+    expect(flowRuns.store[0]?.status).toBe('completed');
+
+    const contact2 = await contacts.create({
+      phone: '5491155443322',
+      active: true,
+      tags: ['staff'],
+      language: 'es',
+    });
+    sendInteractive.mockRejectedValueOnce(new Error('boom'));
+    await expect(
+      service.startFlow(String(flow._id), {
+        contactId: String(contact2._id),
+      }),
+    ).rejects.toThrow('boom');
+    expect(flowRuns.store.some((run) => run.status === 'failed')).toBe(true);
+
+    const inactiveContact = await contacts.create({
+      phone: '5491144332211',
+      active: false,
+      tags: ['staff'],
+    });
+    await expect(
+      service.startFlow(String(flow._id), {
+        contactId: String(inactiveContact._id),
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    await expect(
+      service.createFlow({
+        name: 'bad',
+        startNodeId: 'missing',
+        nodes: [
+          {
+            id: 'a',
+            title: 'A',
+            body: 'B',
+            position: { x: 0, y: 0 },
+          },
+        ],
+        edges: [],
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    const openRuns = await service.listFlowRuns();
+    expect(Array.isArray(openRuns)).toBe(true);
   });
 });

@@ -365,3 +365,88 @@ export class TestSendDto {
   @Length(0, 32)
   ciclo_fin?: string;
 }
+
+export class FlowNodePositionDto {
+  @IsNumber()
+  x!: number;
+
+  @IsNumber()
+  y!: number;
+}
+
+export class FlowNodeDto {
+  @IsString()
+  @Length(1, 64)
+  id!: string;
+
+  @IsString()
+  @Length(1, 160)
+  title!: string;
+
+  @IsString()
+  @Length(1, 4000)
+  body!: string;
+
+  @ValidateNested()
+  @Type(() => FlowNodePositionDto)
+  position!: FlowNodePositionDto;
+}
+
+export class FlowEdgeMatchDto {
+  @IsIn(['equals', 'contains'])
+  type!: 'equals' | 'contains';
+
+  @IsString()
+  @Length(1, 200)
+  value!: string;
+}
+
+export class FlowEdgeDto {
+  @IsString()
+  @Length(1, 64)
+  id!: string;
+
+  @IsString()
+  @Length(1, 64)
+  fromNodeId!: string;
+
+  @IsString()
+  @Length(1, 64)
+  toNodeId!: string;
+
+  @ValidateNested()
+  @Type(() => FlowEdgeMatchDto)
+  match!: FlowEdgeMatchDto;
+}
+
+export class UpsertFlowDto {
+  @IsString()
+  @Length(1, 160)
+  name!: string;
+
+  @IsOptional()
+  @IsBoolean()
+  active?: boolean;
+
+  @IsString()
+  @Length(1, 64)
+  startNodeId!: string;
+
+  @IsArray()
+  @ArrayMaxSize(40)
+  @ValidateNested({ each: true })
+  @Type(() => FlowNodeDto)
+  nodes!: FlowNodeDto[];
+
+  @IsArray()
+  @ArrayMaxSize(80)
+  @ValidateNested({ each: true })
+  @Type(() => FlowEdgeDto)
+  edges!: FlowEdgeDto[];
+}
+
+export class StartFlowDto {
+  @IsString()
+  @Length(1, 64)
+  contactId!: string;
+}

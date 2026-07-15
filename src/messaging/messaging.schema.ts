@@ -84,6 +84,9 @@ export interface StaffMessage {
   title?: string;
   templateKey?: string;
   catalogMessageId?: Types.ObjectId;
+  flowId?: Types.ObjectId;
+  flowRunId?: Types.ObjectId;
+  flowNodeId?: string;
   /** Root outbound message id for this conversation turn. */
   threadId?: Types.ObjectId;
   /** Full WhatsApp body text. Never truncated in storage. */
@@ -93,7 +96,7 @@ export interface StaffMessage {
   status: 'sent' | 'failed' | 'received';
   providerMessageId?: string;
   error?: string;
-  source?: 'test' | 'remind' | 'dispatch' | 'catalog' | 'webhook';
+  source?: 'test' | 'remind' | 'dispatch' | 'catalog' | 'webhook' | 'flow';
   sentAt?: Date;
   /** When the recipient is considered to have received the outbound ask (usually sentAt). */
   receivedAt?: Date;
@@ -111,6 +114,42 @@ export interface StaffCatalogMessage {
   active: boolean;
 }
 
+export type FlowMatchType = 'equals' | 'contains';
+
+export interface MessageFlowNode {
+  id: string;
+  title: string;
+  body: string;
+  position: { x: number; y: number };
+}
+
+export interface MessageFlowEdge {
+  id: string;
+  fromNodeId: string;
+  toNodeId: string;
+  match: { type: FlowMatchType; value: string };
+}
+
+export interface MessageFlow {
+  name: string;
+  active: boolean;
+  startNodeId: string;
+  nodes: MessageFlowNode[];
+  edges: MessageFlowEdge[];
+}
+
+export type MessageFlowRunStatus =
+  'idle' | 'awaiting_reply' | 'completed' | 'failed';
+
+export interface MessageFlowRun {
+  flowId: Types.ObjectId;
+  contactId: Types.ObjectId;
+  currentNodeId: string;
+  status: MessageFlowRunStatus;
+  stepCount: number;
+  lastOutboundMessageId?: Types.ObjectId;
+}
+
 export type WhatsAppContactDocument = HydratedDocument<WhatsAppContact>;
 export type MessageTemplateDocument = HydratedDocument<MessageTemplate>;
 export type CicloDocument = HydratedDocument<Ciclo>;
@@ -118,6 +157,8 @@ export type WorkStatusDocument = HydratedDocument<WorkStatus>;
 export type MessageDispatchDocument = HydratedDocument<MessageDispatch>;
 export type StaffMessageDocument = HydratedDocument<StaffMessage>;
 export type StaffCatalogMessageDocument = HydratedDocument<StaffCatalogMessage>;
+export type MessageFlowDocument = HydratedDocument<MessageFlow>;
+export type MessageFlowRunDocument = HydratedDocument<MessageFlowRun>;
 
 export const WHATSAPP_CONTACT_MODEL = 'WhatsAppContact';
 export const MESSAGE_TEMPLATE_MODEL = 'MessageTemplate';
@@ -126,7 +167,8 @@ export const WORK_STATUS_MODEL = 'WorkStatus';
 export const MESSAGE_DISPATCH_MODEL = 'MessageDispatch';
 export const STAFF_MESSAGE_MODEL = 'StaffMessage';
 export const STAFF_CATALOG_MESSAGE_MODEL = 'StaffCatalogMessage';
-
+export const MESSAGE_FLOW_MODEL = 'MessageFlow';
+export const MESSAGE_FLOW_RUN_MODEL = 'MessageFlowRun';
 export const whatsAppContactSchema = new Schema<WhatsAppContact>(
   {
     phone: { type: String, required: true, unique: true, trim: true },
@@ -245,6 +287,17 @@ export const staffMessageSchema: Schema<StaffMessage> =
         ref: STAFF_CATALOG_MESSAGE_MODEL,
         index: true,
       },
+      flowId: {
+        type: Schema.Types.ObjectId,
+        ref: MESSAGE_FLOW_MODEL,
+        index: true,
+      },
+      flowRunId: {
+        type: Schema.Types.ObjectId,
+        ref: MESSAGE_FLOW_RUN_MODEL,
+        index: true,
+      },
+      flowNodeId: { type: String, trim: true },
       threadId: {
         type: Schema.Types.ObjectId,
         ref: STAFF_MESSAGE_MODEL,
@@ -261,7 +314,7 @@ export const staffMessageSchema: Schema<StaffMessage> =
       error: String,
       source: {
         type: String,
-        enum: ['test', 'remind', 'dispatch', 'catalog', 'webhook'],
+        enum: ['test', 'remind', 'dispatch', 'catalog', 'webhook', 'flow'],
       },
       sentAt: Date,
       receivedAt: Date,
@@ -297,3 +350,80 @@ export const staffCatalogMessageSchema: Schema<StaffCatalogMessage> =
     },
     { timestamps: true },
   );
+
+export const messageFlowSchema: Schema<MessageFlow> = new Schema<MessageFlow>(
+  {
+    name: { type: String, required: true, trim: true },
+    active: { type: Boolean, required: true, default: true },
+    startNodeId: { type: String, required: true, trim: true },
+    nodes: {
+      type: [
+        {
+          id: { type: String, required: true },
+          title: { type: String, required: true },
+          body: { type: String, required: true },
+          position: {
+            x: { type: Number, required: true },
+            y: { type: Number, required: true },
+          },
+        },
+      ],
+      required: true,
+      default: [],
+    },
+    edges: {
+      type: [
+        {
+          id: { type: String, required: true },
+          fromNodeId: { type: String, required: true },
+          toNodeId: { type: String, required: true },
+          match: {
+            type: {
+              type: String,
+              required: true,
+              enum: ['equals', 'contains'],
+            },
+            value: { type: String, required: true },
+          },
+        },
+      ],
+      required: true,
+      default: [],
+    },
+  },
+  { timestamps: true },
+);
+
+export const messageFlowRunSchema: Schema<MessageFlowRun> =
+  new Schema<MessageFlowRun>(
+    {
+      flowId: {
+        type: Schema.Types.ObjectId,
+        ref: MESSAGE_FLOW_MODEL,
+        required: true,
+        index: true,
+      },
+      contactId: {
+        type: Schema.Types.ObjectId,
+        ref: WHATSAPP_CONTACT_MODEL,
+        required: true,
+        index: true,
+      },
+      currentNodeId: { type: String, required: true, trim: true },
+      status: {
+        type: String,
+        required: true,
+        enum: ['idle', 'awaiting_reply', 'completed', 'failed'],
+      },
+      stepCount: { type: Number, required: true, default: 0, min: 0 },
+      lastOutboundMessageId: {
+        type: Schema.Types.ObjectId,
+        ref: STAFF_MESSAGE_MODEL,
+      },
+    },
+    { timestamps: true },
+  );
+messageFlowRunSchema.index(
+  { contactId: 1, status: 1 },
+  { unique: true, partialFilterExpression: { status: 'awaiting_reply' } },
+);
