@@ -195,6 +195,33 @@ export class UpsertWorkStatusDto {
   asOf?: string;
 }
 
+export class RemindDto {
+  @IsString()
+  @Length(1, 64)
+  contactId!: string;
+}
+
+export class InboundMessageDto {
+  @IsString()
+  @Length(8, 40)
+  phone!: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 4000)
+  body?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 4000)
+  text?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 120)
+  providerMessageId?: string;
+}
+
 export class TestSendDto {
   @IsString()
   @Length(8, 20)

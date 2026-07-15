@@ -23,7 +23,7 @@ describe('MessagingModule', () => {
   it('registers messaging providers when Mongo is configured', () => {
     process.env.MONGO_URI = 'mongodb://localhost:27017/nodika';
     const dynamic = MessagingModule.register();
-    expect(dynamic.controllers?.length).toBe(1);
+    expect(dynamic.controllers?.length).toBe(2);
     expect(dynamic.providers?.length).toBeGreaterThan(0);
 
     const clientProvider = dynamic.providers?.find(

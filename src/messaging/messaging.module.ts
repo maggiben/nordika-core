@@ -6,15 +6,18 @@ import { getMongoUri } from '../mongo/mongo.config';
 import { EvolutionClient } from './evolution.client';
 import { MessagingController } from './messaging.controller';
 import { MessagingScheduler } from './messaging.scheduler';
+import { MessagingWebhookController } from './messaging.webhook.controller';
 import {
   CICLO_MODEL,
   MESSAGE_DISPATCH_MODEL,
   MESSAGE_TEMPLATE_MODEL,
+  STAFF_MESSAGE_MODEL,
   WHATSAPP_CONTACT_MODEL,
   WORK_STATUS_MODEL,
   cicloSchema,
   messageDispatchSchema,
   messageTemplateSchema,
+  staffMessageSchema,
   whatsAppContactSchema,
   workStatusSchema,
 } from './messaging.schema';
@@ -37,15 +40,17 @@ export class MessagingModule {
           { name: CICLO_MODEL, schema: cicloSchema },
           { name: WORK_STATUS_MODEL, schema: workStatusSchema },
           { name: MESSAGE_DISPATCH_MODEL, schema: messageDispatchSchema },
+          { name: STAFF_MESSAGE_MODEL, schema: staffMessageSchema },
         ]),
       ],
-      controllers: [MessagingController],
+      controllers: [MessagingController, MessagingWebhookController],
       providers: [
         MessagingService,
         MessagingScheduler,
         {
           provide: EvolutionClient,
-          useFactory: () => new EvolutionClient(getEvolutionConfig()),
+          useFactory: (): EvolutionClient =>
+            new EvolutionClient(getEvolutionConfig()),
         },
       ],
     };

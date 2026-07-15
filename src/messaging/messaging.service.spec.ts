@@ -171,6 +171,18 @@ describe('MessagingService', () => {
     renderedText: string;
     error?: string;
   }>();
+  const messages = createModelMock<{
+    contactId: Types.ObjectId;
+    phone: string;
+    direction: string;
+    templateKey?: string;
+    body: string;
+    status: string;
+    providerMessageId?: string;
+    error?: string;
+    sentAt?: Date;
+    receivedAt?: Date;
+  }>();
 
   const isConfigured = jest.fn(() => true);
   const sendInteractive = jest.fn(() =>
@@ -196,6 +208,7 @@ describe('MessagingService', () => {
       ciclos,
       workStatuses,
       dispatches,
+      messages,
     ]) {
       model.store.length = 0;
       jest.clearAllMocks();
@@ -214,6 +227,7 @@ describe('MessagingService', () => {
       ciclos as never,
       workStatuses as never,
       dispatches as never,
+      messages as never,
       evolution,
       cache,
     );
@@ -307,7 +321,10 @@ describe('MessagingService', () => {
       label: 'PM',
     });
     expect(contact.phone).toBe('5491112345678');
-    expect(invalidatePaths).toHaveBeenCalledWith(['/messaging/contacts']);
+    expect(invalidatePaths).toHaveBeenCalledWith([
+      '/messaging/contacts',
+      '/messaging/roster',
+    ]);
     expect(await service.listContacts()).toHaveLength(1);
     await expect(
       service.updateContact(String(contact._id), { active: false }),
@@ -585,5 +602,163 @@ describe('MessagingService', () => {
     await expect(service.runWeeklyStatusDispatch()).rejects.toBeInstanceOf(
       ServiceUnavailableException,
     );
+  });
+
+  it('sends a test message and records outbound history', async () => {
+    await templates.create({
+      key: 'weekly_status',
+      name: 'Weekly',
+      format: 'interactive_v1',
+      body: { text: 'Hi {{percent}}', title: '{{ciclo_name}}', widgets: [] },
+      active: true,
+    });
+    const contact = await contacts.create({
+      phone: '5491112345678',
+      active: true,
+      tags: ['staff'],
+      label: 'PM',
+    });
+
+    const result = await service.sendTestMessage({
+      phone: '+54 9 11 1234-5678',
+      templateKey: 'weekly_status',
+    });
+    expect(result.ok).toBe(true);
+    expect(messages.store).toHaveLength(1);
+    expect(messages.store[0]).toMatchObject({
+      contactId: contact._id,
+      direction: 'outbound',
+      status: 'sent',
+      templateKey: 'weekly_status',
+    });
+
+    const roster = await service.listStaffRoster();
+    expect(roster).toHaveLength(1);
+    expect(roster[0]?.hasOutbound).toBe(true);
+    expect(roster[0]?.lastTemplateKey).toBe('weekly_status');
+  });
+
+  it('records failed test sends and rejects missing templates', async () => {
+    await templates.create({
+      key: 'weekly_status',
+      name: 'Weekly',
+      format: 'interactive_v1',
+      body: { text: 'Hi', widgets: [] },
+      active: true,
+    });
+    await contacts.create({
+      phone: '5491112345678',
+      active: true,
+      tags: ['staff'],
+    });
+    sendInteractive.mockImplementationOnce(() =>
+      Promise.reject(new Error('send failed')),
+    );
+    await expect(
+      service.sendTestMessage({
+        phone: '5491112345678',
+        templateKey: 'weekly_status',
+      }),
+    ).rejects.toThrow('send failed');
+    expect(messages.store[0]?.status).toBe('failed');
+
+    await expect(
+      service.sendTestMessage({
+        phone: '5491112345678',
+        templateKey: 'missing',
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    isConfigured.mockReturnValue(false);
+    await expect(
+      service.sendTestMessage({
+        phone: '5491112345678',
+        templateKey: 'weekly_status',
+      }),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+  });
+
+  it('reminds by resending the last outbound message', async () => {
+    const contact = await contacts.create({
+      phone: '5491112345678',
+      active: true,
+      tags: ['staff'],
+      label: 'PM',
+    });
+    await messages.create({
+      contactId: contact._id,
+      phone: contact.phone,
+      direction: 'outbound',
+      templateKey: 'weekly_status',
+      body: 'Previous message',
+      status: 'sent',
+      sentAt: new Date('2026-07-01T00:00:00Z'),
+    });
+
+    const result = await service.remindContact(String(contact._id));
+    expect(result.renderedText).toBe('Previous message');
+    expect(sendInteractive).toHaveBeenCalled();
+    expect(messages.store.length).toBeGreaterThan(1);
+
+    await expect(
+      service.remindContact(new Types.ObjectId().toHexString()),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    const empty = await contacts.create({
+      phone: '5491199999999',
+      active: true,
+      tags: ['staff'],
+    });
+    await expect(
+      service.remindContact(String(empty._id)),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('records inbound replies from Evolution payloads', async () => {
+    const contact = await contacts.create({
+      phone: '5491112345678',
+      active: true,
+      tags: ['staff'],
+    });
+
+    const extracted = service.extractInboundFromEvolution({
+      data: {
+        key: {
+          remoteJid: '5491112345678@s.whatsapp.net',
+          fromMe: false,
+          id: 'm1',
+        },
+        message: { conversation: 'Ok listo' },
+      },
+    });
+    expect(extracted).toMatchObject({
+      phone: '5491112345678',
+      body: 'Ok listo',
+      providerMessageId: 'm1',
+    });
+
+    expect(
+      service.extractInboundFromEvolution({
+        data: {
+          key: { fromMe: true, remoteJid: '5491112345678@s.whatsapp.net' },
+        },
+      }),
+    ).toBeNull();
+
+    const recorded = await service.recordInboundMessage({
+      phone: '5491112345678',
+      body: 'Ok listo',
+    });
+    expect(recorded.contactId).toBe(String(contact._id));
+    expect(messages.store.some((item) => item.direction === 'inbound')).toBe(
+      true,
+    );
+
+    const roster = await service.listStaffRoster();
+    expect(roster[0]?.lastReceivedAt).toBeTruthy();
+
+    await expect(
+      service.recordInboundMessage({ phone: '5491100000000', text: 'hola' }),
+    ).resolves.toMatchObject({ contactId: null });
   });
 });

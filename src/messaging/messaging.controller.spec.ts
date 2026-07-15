@@ -14,6 +14,9 @@ describe('MessagingController', () => {
   const upsertWorkStatus = jest.fn();
   const listWorkStatuses = jest.fn();
   const listDispatches = jest.fn();
+  const listStaffRoster = jest.fn();
+  const sendTestMessage = jest.fn();
+  const remindContact = jest.fn();
   const runWeeklyStatusDispatch = jest.fn();
 
   const messaging = {
@@ -29,6 +32,9 @@ describe('MessagingController', () => {
     upsertWorkStatus,
     listWorkStatuses,
     listDispatches,
+    listStaffRoster,
+    sendTestMessage,
+    remindContact,
     runWeeklyStatusDispatch,
   } as unknown as MessagingService;
 
@@ -68,9 +74,18 @@ describe('MessagingController', () => {
     });
     await controller.listWorkStatuses('id');
     await controller.listDispatches('id');
+    await controller.listStaffRoster();
+    await controller.testSend({
+      phone: '5491112345678',
+      templateKey: 'weekly',
+    });
+    await controller.remind({ contactId: 'id' });
     await controller.runWeeklyDispatch();
 
     expect(runWeeklyStatusDispatch).toHaveBeenCalled();
+    expect(listStaffRoster).toHaveBeenCalled();
+    expect(sendTestMessage).toHaveBeenCalled();
+    expect(remindContact).toHaveBeenCalledWith('id');
     expect(upsertWorkStatus).toHaveBeenCalled();
   });
 });

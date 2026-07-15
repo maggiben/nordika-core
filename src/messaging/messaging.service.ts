@@ -14,6 +14,7 @@ import {
   CreateCicloDto,
   CreateContactDto,
   CreateTemplateDto,
+  InboundMessageDto,
   TestSendDto,
   UpdateCicloDto,
   UpdateContactDto,
@@ -30,6 +31,9 @@ import {
   MessageDispatchDocument,
   MessageTemplate,
   MessageTemplateDocument,
+  STAFF_MESSAGE_MODEL,
+  StaffMessage,
+  StaffMessageDocument,
   TemplateWidget,
   WHATSAPP_CONTACT_MODEL,
   WORK_STATUS_MODEL,
@@ -51,6 +55,19 @@ export interface WeeklyDispatchSummary {
   skipped: number;
 }
 
+export interface StaffRosterRow {
+  _id: string;
+  phone: string;
+  label?: string;
+  active: boolean;
+  tags: string[];
+  lastSentAt: string | null;
+  lastReceivedAt: string | null;
+  lastTemplateKey: string | null;
+  messageTypes: string[];
+  hasOutbound: boolean;
+}
+
 @Injectable()
 export class MessagingService {
   private readonly logger = new Logger(MessagingService.name);
@@ -66,6 +83,8 @@ export class MessagingService {
     private readonly workStatuses: Model<WorkStatusDocument>,
     @InjectModel(MESSAGE_DISPATCH_MODEL)
     private readonly dispatches: Model<MessageDispatchDocument>,
+    @InjectModel(STAFF_MESSAGE_MODEL)
+    private readonly messages: Model<StaffMessageDocument>,
     private readonly evolution: EvolutionClient,
     private readonly cache: OptionalCacheService,
   ) {}
@@ -87,7 +106,10 @@ export class MessagingService {
       active: dto.active ?? true,
       tags: dto.tags ?? [],
     });
-    await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.contacts]);
+    await this.cache.invalidatePaths([
+      MESSAGING_CACHE_PATHS.contacts,
+      MESSAGING_CACHE_PATHS.roster,
+    ]);
     return contact;
   }
 
@@ -108,7 +130,10 @@ export class MessagingService {
     if (!contact) {
       throw new NotFoundException('Contact not found.');
     }
-    await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.contacts]);
+    await this.cache.invalidatePaths([
+      MESSAGING_CACHE_PATHS.contacts,
+      MESSAGING_CACHE_PATHS.roster,
+    ]);
     return contact;
   }
 
@@ -310,9 +335,7 @@ export class MessagingService {
       .findOne({ key: dto.templateKey, active: true })
       .exec();
     if (!template) {
-      throw new NotFoundException(
-        `Template ${dto.templateKey} was not found.`,
-      );
+      throw new NotFoundException(`Template ${dto.templateKey} was not found.`);
     }
 
     const variables = {
@@ -335,19 +358,270 @@ export class MessagingService {
         : template.body.title,
     };
 
-    const result = await this.evolution.sendInteractive(
-      phone,
-      renderedBody,
-      renderedText,
+    const contact = await this.contacts.findOne({ phone }).exec();
+
+    try {
+      const result = await this.evolution.sendInteractive(
+        phone,
+        renderedBody,
+        renderedText,
+      );
+
+      if (contact) {
+        await this.recordStaffMessage({
+          contactId: contact._id,
+          phone,
+          direction: 'outbound',
+          templateKey: dto.templateKey,
+          body: renderedText,
+          status: 'sent',
+          providerMessageId: result.providerMessageId,
+          sentAt: new Date(),
+        });
+      }
+
+      return {
+        ok: true,
+        phone,
+        templateKey: dto.templateKey,
+        renderedText,
+        providerMessageId: result.providerMessageId,
+      };
+    } catch (error) {
+      if (contact) {
+        const message =
+          error instanceof Error ? error.message : 'Unknown send error';
+        await this.recordStaffMessage({
+          contactId: contact._id,
+          phone,
+          direction: 'outbound',
+          templateKey: dto.templateKey,
+          body: renderedText,
+          status: 'failed',
+          error: message,
+          sentAt: new Date(),
+        });
+      }
+      throw error;
+    }
+  }
+
+  async listStaffRoster(): Promise<StaffRosterRow[]> {
+    const contacts = await this.contacts.find({ active: true }).exec();
+    const staff = contacts.filter((contact) =>
+      (contact.tags ?? []).includes('staff'),
     );
 
-    return {
-      ok: true,
-      phone,
-      templateKey: dto.templateKey,
-      renderedText,
-      providerMessageId: result.providerMessageId,
+    const rows: StaffRosterRow[] = [];
+    for (const contact of staff) {
+      const outbound = await this.messages
+        .find({
+          contactId: contact._id,
+          direction: 'outbound',
+          status: 'sent',
+        })
+        .sort({ sentAt: -1, createdAt: -1 })
+        .limit(50)
+        .exec();
+      const inbound = await this.messages
+        .find({
+          contactId: contact._id,
+          direction: 'inbound',
+        })
+        .sort({ receivedAt: -1, createdAt: -1 })
+        .limit(1)
+        .exec();
+
+      const lastOutbound = outbound[0] ?? null;
+      const lastInbound = inbound[0] ?? null;
+      const messageTypes = [
+        ...new Set(
+          outbound
+            .map((item) => item.templateKey)
+            .filter((key): key is string => Boolean(key)),
+        ),
+      ];
+
+      rows.push({
+        _id: String(contact._id),
+        phone: contact.phone,
+        label: contact.label,
+        active: contact.active,
+        tags: contact.tags ?? [],
+        lastSentAt: lastOutbound?.sentAt
+          ? lastOutbound.sentAt.toISOString()
+          : null,
+        lastReceivedAt: lastInbound?.receivedAt
+          ? lastInbound.receivedAt.toISOString()
+          : null,
+        lastTemplateKey: lastOutbound?.templateKey ?? null,
+        messageTypes,
+        hasOutbound: Boolean(lastOutbound),
+      });
+    }
+
+    return rows.sort((a, b) =>
+      (a.label ?? a.phone).localeCompare(b.label ?? b.phone),
+    );
+  }
+
+  async remindContact(contactId: string): Promise<{
+    ok: true;
+    phone: string;
+    templateKey: string | null;
+    renderedText: string;
+    providerMessageId?: string;
+  }> {
+    if (!this.evolution.isConfigured()) {
+      throw new ServiceUnavailableException(
+        'WhatsApp messaging is not configured (Evolution API).',
+      );
+    }
+
+    const contact = await this.contacts
+      .findById(this.toObjectId(contactId, 'contact'))
+      .exec();
+    if (!contact || !contact.active) {
+      throw new NotFoundException('Contact not found.');
+    }
+
+    const lastOutbound = await this.messages
+      .find({
+        contactId: contact._id,
+        direction: 'outbound',
+        status: 'sent',
+      })
+      .sort({ sentAt: -1, createdAt: -1 })
+      .limit(1)
+      .exec();
+    const previous = lastOutbound[0];
+    if (!previous?.body?.trim()) {
+      throw new NotFoundException(
+        'No previous outbound message to resend for this contact.',
+      );
+    }
+
+    const body: InteractiveTemplateBody = {
+      text: previous.body,
+      widgets: [],
     };
+
+    try {
+      const result = await this.evolution.sendInteractive(
+        contact.phone,
+        body,
+        previous.body,
+      );
+      await this.recordStaffMessage({
+        contactId: contact._id,
+        phone: contact.phone,
+        direction: 'outbound',
+        templateKey: previous.templateKey,
+        body: previous.body,
+        status: 'sent',
+        providerMessageId: result.providerMessageId,
+        sentAt: new Date(),
+      });
+      return {
+        ok: true,
+        phone: contact.phone,
+        templateKey: previous.templateKey ?? null,
+        renderedText: previous.body,
+        providerMessageId: result.providerMessageId,
+      };
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unknown send error';
+      await this.recordStaffMessage({
+        contactId: contact._id,
+        phone: contact.phone,
+        direction: 'outbound',
+        templateKey: previous.templateKey,
+        body: previous.body,
+        status: 'failed',
+        error: message,
+        sentAt: new Date(),
+      });
+      throw error;
+    }
+  }
+
+  extractInboundFromEvolution(
+    payload: Record<string, unknown>,
+  ): InboundMessageDto | null {
+    const data =
+      payload.data && typeof payload.data === 'object'
+        ? (payload.data as Record<string, unknown>)
+        : payload;
+
+    const key =
+      typeof data.key === 'object' && data.key !== null
+        ? (data.key as Record<string, unknown>)
+        : undefined;
+    const fromMe = key?.fromMe === true;
+    if (fromMe) {
+      return null;
+    }
+
+    const remote =
+      (typeof key?.remoteJid === 'string' && key.remoteJid) ||
+      (typeof data.remoteJid === 'string' && data.remoteJid) ||
+      (typeof data.from === 'string' && data.from) ||
+      '';
+    const phoneDigits = remote.replace(/\D/g, '').replace(/@.*$/, '');
+    if (phoneDigits.length < 8) {
+      return null;
+    }
+
+    const message =
+      data.message && typeof data.message === 'object'
+        ? (data.message as Record<string, unknown>)
+        : undefined;
+    const conversation =
+      (typeof message?.conversation === 'string' && message.conversation) ||
+      (typeof (message?.extendedTextMessage as { text?: string } | undefined)
+        ?.text === 'string' &&
+        (message?.extendedTextMessage as { text: string }).text) ||
+      (typeof data.body === 'string' && data.body) ||
+      (typeof data.text === 'string' && data.text) ||
+      '';
+
+    const providerMessageId =
+      (typeof key?.id === 'string' && key.id) ||
+      (typeof data.id === 'string' && data.id) ||
+      undefined;
+
+    return {
+      phone: phoneDigits.slice(0, 20),
+      body: conversation || '(respuesta recibida)',
+      providerMessageId,
+    };
+  }
+
+  async recordInboundMessage(dto: InboundMessageDto): Promise<{
+    ok: true;
+    contactId: string | null;
+    phone: string;
+  }> {
+    const phone = this.normalizePhone(dto.phone);
+    const body = (dto.body ?? dto.text ?? '').trim() || '(respuesta recibida)';
+    const contact = await this.contacts.findOne({ phone }).exec();
+    if (!contact) {
+      this.logger.warn(`Inbound message for unknown phone ${phone}`);
+      return { ok: true, contactId: null, phone };
+    }
+
+    await this.recordStaffMessage({
+      contactId: contact._id,
+      phone,
+      direction: 'inbound',
+      body,
+      status: 'received',
+      providerMessageId: dto.providerMessageId,
+      receivedAt: new Date(),
+    });
+    await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.roster]);
+    return { ok: true, contactId: String(contact._id), phone };
   }
 
   async runWeeklyStatusDispatch(
@@ -469,6 +743,15 @@ export class MessagingService {
             renderedText,
             sentAt: new Date(),
           });
+          await this.recordStaffMessage({
+            contactId: contact._id,
+            phone: contact.phone,
+            direction: 'outbound',
+            templateKey: template.key,
+            body: renderedText,
+            status: 'sent',
+            sentAt: new Date(),
+          });
           sent += 1;
         } catch (error) {
           const message =
@@ -482,6 +765,16 @@ export class MessagingService {
             status: 'failed',
             renderedText,
             error: message,
+          });
+          await this.recordStaffMessage({
+            contactId: contact._id,
+            phone: contact.phone,
+            direction: 'outbound',
+            templateKey: template.key,
+            body: renderedText,
+            status: 'failed',
+            error: message,
+            sentAt: new Date(),
           });
           failed += 1;
         }
@@ -498,6 +791,7 @@ export class MessagingService {
 
     await this.cache.invalidatePaths([
       MESSAGING_CACHE_PATHS.dispatches(),
+      MESSAGING_CACHE_PATHS.roster,
       ...summaries.map((summary) =>
         MESSAGING_CACHE_PATHS.dispatches(summary.cicloId),
       ),
@@ -613,6 +907,13 @@ export class MessagingService {
     },
   ): Promise<void> {
     await this.dispatches.create(data);
+  }
+
+  private async recordStaffMessage(
+    data: Omit<StaffMessage, never> & { contactId: Types.ObjectId },
+  ): Promise<void> {
+    await this.messages.create(data);
+    await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.roster]);
   }
 
   private toObjectId(id: string, label: string): Types.ObjectId {

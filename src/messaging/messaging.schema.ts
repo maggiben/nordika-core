@@ -75,17 +75,32 @@ export interface MessageDispatch {
   sentAt?: Date;
 }
 
+export interface StaffMessage {
+  contactId: Types.ObjectId;
+  phone: string;
+  direction: 'outbound' | 'inbound';
+  templateKey?: string;
+  body: string;
+  status: 'sent' | 'failed' | 'received';
+  providerMessageId?: string;
+  error?: string;
+  sentAt?: Date;
+  receivedAt?: Date;
+}
+
 export type WhatsAppContactDocument = HydratedDocument<WhatsAppContact>;
 export type MessageTemplateDocument = HydratedDocument<MessageTemplate>;
 export type CicloDocument = HydratedDocument<Ciclo>;
 export type WorkStatusDocument = HydratedDocument<WorkStatus>;
 export type MessageDispatchDocument = HydratedDocument<MessageDispatch>;
+export type StaffMessageDocument = HydratedDocument<StaffMessage>;
 
 export const WHATSAPP_CONTACT_MODEL = 'WhatsAppContact';
 export const MESSAGE_TEMPLATE_MODEL = 'MessageTemplate';
 export const CICLO_MODEL = 'Ciclo';
 export const WORK_STATUS_MODEL = 'WorkStatus';
 export const MESSAGE_DISPATCH_MODEL = 'MessageDispatch';
+export const STAFF_MESSAGE_MODEL = 'StaffMessage';
 
 export const whatsAppContactSchema = new Schema<WhatsAppContact>(
   {
@@ -175,3 +190,34 @@ export const messageDispatchSchema = new Schema<MessageDispatch>(
   { timestamps: true },
 );
 messageDispatchSchema.index({ cicloId: 1, weekNumber: 1, phone: 1 });
+
+export const staffMessageSchema = new Schema<StaffMessage>(
+  {
+    contactId: {
+      type: Schema.Types.ObjectId,
+      ref: WHATSAPP_CONTACT_MODEL,
+      required: true,
+      index: true,
+    },
+    phone: { type: String, required: true, index: true },
+    direction: {
+      type: String,
+      required: true,
+      enum: ['outbound', 'inbound'],
+    },
+    templateKey: { type: String, trim: true },
+    body: { type: String, required: true },
+    status: {
+      type: String,
+      required: true,
+      enum: ['sent', 'failed', 'received'],
+    },
+    providerMessageId: String,
+    error: String,
+    sentAt: Date,
+    receivedAt: Date,
+  },
+  { timestamps: true },
+);
+staffMessageSchema.index({ contactId: 1, direction: 1, createdAt: -1 });
+staffMessageSchema.index({ phone: 1, direction: 1, createdAt: -1 });
