@@ -1842,10 +1842,13 @@ export class MessagingService {
     }
 
     const { flow, run, contact, node } = input;
+    const step = Math.max(1, run.stepCount + 1);
+    const total = Math.max(1, flow.nodes.length);
+    const labeledTitle = `${step}/${total} · ${node.title}`;
     const sentAt = new Date();
     const interactive: InteractiveTemplateBody = {
       text: node.body,
-      title: node.title,
+      title: labeledTitle,
       widgets: [],
     };
     const language = normalizeLanguage(
@@ -1864,7 +1867,7 @@ export class MessagingService {
         contactId: contact._id,
         phone: contact.phone,
         direction: 'outbound',
-        title: node.title,
+        title: labeledTitle,
         body: node.body,
         status: 'sent',
         providerMessageId: result.providerMessageId,
@@ -1883,7 +1886,7 @@ export class MessagingService {
         contactId: contact._id,
         phone: contact.phone,
         direction: 'outbound',
-        title: node.title,
+        title: labeledTitle,
         body: node.body,
         status: 'failed',
         error: message,

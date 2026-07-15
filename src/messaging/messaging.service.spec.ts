@@ -1201,8 +1201,14 @@ describe('MessagingService', () => {
     });
     expect(started.ok).toBe(true);
     expect(sendInteractive).toHaveBeenCalledTimes(1);
+    const firstFlowSend = sendInteractive.mock.calls[0] as unknown as [
+      string,
+      { title?: string },
+    ];
+    expect(firstFlowSend[1].title).toBe('1/2 · Asistencia');
     expect(flowRuns.store[0]?.status).toBe('awaiting_reply');
     expect(messages.store[0]?.source).toBe('flow');
+    expect(messages.store[0]?.title).toBe('1/2 · Asistencia');
 
     const runs = await service.listFlowRuns(String(contact._id));
     expect(runs).toHaveLength(1);
@@ -1221,12 +1227,82 @@ describe('MessagingService', () => {
       body: 'Día Completo',
     });
     expect(sendInteractive).toHaveBeenCalledTimes(2);
+    const secondFlowSend = sendInteractive.mock.calls[1] as unknown as [
+      string,
+      { title?: string },
+    ];
+    expect(secondFlowSend[1].title).toBe('2/2 · Gracias');
     expect(flowRuns.store[0]?.currentNodeId).toBe('thanks');
     expect(flowRuns.store[0]?.status).toBe('completed');
     expect(flowRuns.store[0]?.stepCount).toBe(2);
 
     await service.deleteFlow(String(created._id));
     expect((await service.getFlow(String(created._id))).active).toBe(false);
+  });
+
+  it('restarts flow step numbers at 1 for each contact', async () => {
+    const leadA = await contacts.create({
+      phone: '5491100000001',
+      label: 'Jefe A',
+      active: true,
+      tags: ['staff'],
+      language: 'es',
+    });
+    const leadB = await contacts.create({
+      phone: '5491100000002',
+      label: 'Jefe B',
+      active: true,
+      tags: ['staff'],
+      language: 'es',
+    });
+    const flow = await flows.create({
+      name: 'Orden',
+      active: true,
+      startNodeId: 'n1',
+      nodes: [
+        {
+          id: 'n1',
+          title: 'Pregunta',
+          body: 'Primera',
+          position: { x: 0, y: 0 },
+        },
+        {
+          id: 'n2',
+          title: 'Seguimiento',
+          body: 'Segunda',
+          position: { x: 100, y: 0 },
+        },
+      ],
+      edges: [
+        {
+          id: 'e1',
+          fromNodeId: 'n1',
+          toNodeId: 'n2',
+          match: { type: 'any', value: '' },
+        },
+      ],
+    });
+
+    const callsBefore = sendInteractive.mock.calls.length;
+    await service.startFlow(String(flow._id), {
+      contactId: String(leadA._id),
+    });
+    await service.recordInboundMessage({
+      phone: leadA.phone,
+      body: 'ok',
+    });
+    await service.startFlow(String(flow._id), {
+      contactId: String(leadB._id),
+    });
+
+    const titles = sendInteractive.mock.calls
+      .slice(callsBefore)
+      .map((call) => (call[1] as { title?: string }).title);
+    expect(titles).toEqual([
+      '1/2 · Pregunta',
+      '2/2 · Seguimiento',
+      '1/2 · Pregunta',
+    ]);
   });
 
   it('keeps awaiting_reply when reply does not match and fails at step cap', async () => {
