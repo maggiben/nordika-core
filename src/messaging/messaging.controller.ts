@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -145,6 +146,11 @@ export class MessagingController {
     @Body() dto: SendCatalogMessageDto,
   ) {
     return this.messaging.sendCatalogMessage(id, dto);
+  }
+
+  @Delete('catalog/:id')
+  deleteCatalogMessage(@Param('id') id: string) {
+    return this.messaging.deleteCatalogMessage(id);
   }
 
   @Post('test-send')

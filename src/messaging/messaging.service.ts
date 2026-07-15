@@ -700,6 +700,21 @@ export class MessagingService {
     return this.updateCatalogMessage(id, { assignedContactId: contactId });
   }
 
+  async deleteCatalogMessage(id: string): Promise<{ ok: true }> {
+    const doc = await this.catalog
+      .findById(this.toObjectId(id, 'catalog message'))
+      .exec();
+    if (!doc || !doc.active) {
+      throw new NotFoundException('Catalog message not found.');
+    }
+    doc.active = false;
+    if (doc.save) {
+      await doc.save();
+    }
+    await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.catalog]);
+    return { ok: true };
+  }
+
   async sendCatalogMessage(
     id: string,
     dto: SendCatalogMessageDto = {},

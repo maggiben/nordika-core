@@ -20,6 +20,7 @@ describe('MessagingController', () => {
   const updateCatalogMessage = jest.fn();
   const assignCatalogMessage = jest.fn();
   const sendCatalogMessage = jest.fn();
+  const deleteCatalogMessage = jest.fn();
   const sendTestMessage = jest.fn();
   const remindContact = jest.fn();
   const runWeeklyStatusDispatch = jest.fn();
@@ -43,6 +44,7 @@ describe('MessagingController', () => {
     updateCatalogMessage,
     assignCatalogMessage,
     sendCatalogMessage,
+    deleteCatalogMessage,
     sendTestMessage,
     remindContact,
     runWeeklyStatusDispatch,
@@ -93,6 +95,7 @@ describe('MessagingController', () => {
     await controller.updateCatalogMessage('id', { title: 'Nuevo' });
     await controller.assignCatalogMessage('id', { contactId: 'c1' });
     await controller.sendCatalogMessage('id', { contactId: 'c1' });
+    await controller.deleteCatalogMessage('id');
     await controller.testSend({
       phone: '5491112345678',
       templateKey: 'weekly_status',
@@ -105,6 +108,7 @@ describe('MessagingController', () => {
     expect(listStaffRoster).toHaveBeenCalled();
     expect(createCatalogMessage).toHaveBeenCalled();
     expect(sendCatalogMessage).toHaveBeenCalledWith('id', { contactId: 'c1' });
+    expect(deleteCatalogMessage).toHaveBeenCalledWith('id');
     expect(sendTestMessage).toHaveBeenCalled();
     expect(remindContact).toHaveBeenCalledWith('id');
   });

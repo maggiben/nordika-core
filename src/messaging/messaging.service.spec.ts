@@ -724,6 +724,21 @@ describe('MessagingService', () => {
     ).toBe(true);
   });
 
+  it('soft-deletes catalog messages so they leave the active list', async () => {
+    const created = await service.createCatalogMessage({
+      title: 'Borrar',
+      body: 'Temporal',
+    });
+    expect(await service.listCatalogMessages()).toHaveLength(1);
+    await expect(service.deleteCatalogMessage(created._id)).resolves.toEqual({
+      ok: true,
+    });
+    expect(await service.listCatalogMessages()).toHaveLength(0);
+    await expect(
+      service.deleteCatalogMessage(created._id),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
   it('records outbound staff messages on test-send and remind', async () => {
     await templates.create({
       key: 'weekly_status',
