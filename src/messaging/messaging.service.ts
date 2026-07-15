@@ -14,6 +14,7 @@ import {
   CreateCicloDto,
   CreateContactDto,
   CreateTemplateDto,
+  TestSendDto,
   UpdateCicloDto,
   UpdateContactDto,
   UpdateTemplateDto,
@@ -289,6 +290,64 @@ export class MessagingService {
       .sort({ createdAt: -1 })
       .limit(200)
       .exec();
+  }
+
+  async sendTestMessage(dto: TestSendDto): Promise<{
+    ok: true;
+    phone: string;
+    templateKey: string;
+    renderedText: string;
+    providerMessageId?: string;
+  }> {
+    if (!this.evolution.isConfigured()) {
+      throw new ServiceUnavailableException(
+        'WhatsApp messaging is not configured (Evolution API).',
+      );
+    }
+
+    const phone = this.normalizePhone(dto.phone);
+    const template = await this.templates
+      .findOne({ key: dto.templateKey, active: true })
+      .exec();
+    if (!template) {
+      throw new NotFoundException(
+        `Template ${dto.templateKey} was not found.`,
+      );
+    }
+
+    const variables = {
+      percent: dto.percent ?? '72',
+      duration: dto.duration ?? '3 semanas',
+      avance: dto.avance ?? 'Estructura avanzada',
+      notes: dto.notes ?? 'Mensaje de prueba',
+      week: dto.week ?? '3',
+      ciclo_name: dto.ciclo_name ?? 'Ciclo de prueba',
+      ciclo_inicio: dto.ciclo_inicio ?? '2026-01-01',
+      ciclo_fin: dto.ciclo_fin ?? '2026-03-31',
+    };
+
+    const renderedText = renderTemplateText(template.body.text, variables);
+    const renderedBody: InteractiveTemplateBody = {
+      ...template.body,
+      text: renderedText,
+      title: template.body.title
+        ? renderTemplateText(template.body.title, variables)
+        : template.body.title,
+    };
+
+    const result = await this.evolution.sendInteractive(
+      phone,
+      renderedBody,
+      renderedText,
+    );
+
+    return {
+      ok: true,
+      phone,
+      templateKey: dto.templateKey,
+      renderedText,
+      providerMessageId: result.providerMessageId,
+    };
   }
 
   async runWeeklyStatusDispatch(

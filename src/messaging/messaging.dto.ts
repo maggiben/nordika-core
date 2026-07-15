@@ -194,3 +194,53 @@ export class UpsertWorkStatusDto {
   @IsDateString()
   asOf?: string;
 }
+
+export class TestSendDto {
+  @IsString()
+  @Length(8, 20)
+  phone!: string;
+
+  @IsString()
+  @Length(1, 64)
+  templateKey!: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 120)
+  percent?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 120)
+  duration?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 500)
+  avance?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 1000)
+  notes?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 32)
+  week?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 120)
+  ciclo_name?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 32)
+  ciclo_inicio?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 32)
+  ciclo_fin?: string;
+}

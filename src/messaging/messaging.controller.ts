@@ -11,7 +11,10 @@ import {
 import { CacheTTL } from '../cache/http-cache.interceptor';
 import { CACHE_TTLS } from '../cache/cache.constants';
 import { Throttle } from '@nestjs/throttler';
-import { MESSAGE_ADMIN_ROLE } from '../auth/auth.constants';
+import {
+  MESSAGE_ADMIN_ROLE,
+  SOURCE_WRITER_ROLE,
+} from '../auth/auth.constants';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
@@ -19,6 +22,7 @@ import {
   CreateCicloDto,
   CreateContactDto,
   CreateTemplateDto,
+  TestSendDto,
   UpdateCicloDto,
   UpdateContactDto,
   UpdateTemplateDto,
@@ -28,7 +32,7 @@ import { MessagingService } from './messaging.service';
 
 @Controller('messaging')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(MESSAGE_ADMIN_ROLE)
+@Roles(MESSAGE_ADMIN_ROLE, SOURCE_WRITER_ROLE)
 @Throttle({ default: { limit: 30, ttl: 60_000 } })
 export class MessagingController {
   constructor(private readonly messaging: MessagingService) {}
@@ -66,6 +70,7 @@ export class MessagingController {
   }
 
   @Post('ciclos')
+  @Roles(MESSAGE_ADMIN_ROLE)
   createCiclo(@Body() dto: CreateCicloDto) {
     return this.messaging.createCiclo(dto);
   }
@@ -77,6 +82,7 @@ export class MessagingController {
   }
 
   @Patch('ciclos/:id')
+  @Roles(MESSAGE_ADMIN_ROLE)
   updateCiclo(@Param('id') id: string, @Body() dto: UpdateCicloDto) {
     return this.messaging.updateCiclo(id, dto);
   }
@@ -98,7 +104,13 @@ export class MessagingController {
     return this.messaging.listDispatches(cicloId);
   }
 
+  @Post('test-send')
+  testSend(@Body() dto: TestSendDto) {
+    return this.messaging.sendTestMessage(dto);
+  }
+
   @Post('dispatch/run')
+  @Roles(MESSAGE_ADMIN_ROLE)
   runWeeklyDispatch() {
     return this.messaging.runWeeklyStatusDispatch();
   }
