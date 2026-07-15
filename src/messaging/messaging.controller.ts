@@ -22,6 +22,7 @@ import {
   CreateContactDto,
   CreateTemplateDto,
   RemindDto,
+  ReorderCatalogMessagesDto,
   SendCatalogMessageDto,
   StartFlowDto,
   TestSendDto,
@@ -129,6 +130,13 @@ export class MessagingController {
   @Get('catalog')
   listCatalogMessages(): Promise<StaffCatalogRow[]> {
     return this.messaging.listCatalogMessages();
+  }
+
+  @Post('catalog/reorder')
+  reorderCatalogMessages(
+    @Body() dto: ReorderCatalogMessagesDto,
+  ): Promise<StaffCatalogRow[]> {
+    return this.messaging.reorderCatalogMessages(dto);
   }
 
   @Patch('catalog/:id')

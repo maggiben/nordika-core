@@ -255,6 +255,7 @@ describe('MessagingService', () => {
     title: string;
     body: string;
     assignedContactId?: Types.ObjectId;
+    sortOrder?: number;
     active: boolean;
   }>();
   const flows = createModelMock<{
@@ -993,6 +994,164 @@ describe('MessagingService', () => {
     await expect(
       service.deleteCatalogMessage(created._id),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('orders catalog messages per lead and advances on reply', async () => {
+    const lead = await contacts.create({
+      phone: '5491199001122',
+      label: 'Capataz',
+      active: true,
+      tags: ['staff'],
+      language: 'es',
+    });
+    const first = await service.createCatalogMessage({
+      title: 'Uno',
+      body: 'Primero',
+      assignedContactId: String(lead._id),
+    });
+    const second = await service.createCatalogMessage({
+      title: 'Dos',
+      body: 'Segundo',
+      assignedContactId: String(lead._id),
+    });
+    expect(first.sortOrder).toBe(1);
+    expect(second.sortOrder).toBe(2);
+
+    const reordered = await service.reorderCatalogMessages({
+      contactId: String(lead._id),
+      orderedIds: [second._id, first._id],
+    });
+    const forLead = reordered.filter(
+      (row) => row.assignedContactId === String(lead._id),
+    );
+    expect(forLead.map((row) => row._id)).toEqual([second._id, first._id]);
+    expect(forLead.map((row) => row.sortOrder)).toEqual([1, 2]);
+
+    const before = sendInteractive.mock.calls.length;
+    await service.sendCatalogMessage(second._id, {
+      contactId: String(lead._id),
+    });
+    expect(
+      (
+        sendInteractive.mock.calls[before] as unknown as [
+          string,
+          { title?: string },
+        ]
+      )[1].title,
+    ).toBe('1/2 · Dos');
+
+    await service.recordInboundMessage({
+      phone: lead.phone,
+      body: 'ok',
+    });
+    expect(sendInteractive.mock.calls.length).toBe(before + 2);
+    expect(
+      (
+        sendInteractive.mock.calls[before + 1] as unknown as [
+          string,
+          { title?: string },
+        ]
+      )[1].title,
+    ).toBe('2/2 · Uno');
+
+    const other = await contacts.create({
+      phone: '5491199003344',
+      label: 'Otro',
+      active: true,
+      tags: ['staff'],
+      language: 'es',
+    });
+    await expect(
+      service.reorderCatalogMessages({
+        contactId: String(lead._id),
+        orderedIds: [],
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      service.reorderCatalogMessages({
+        contactId: String(lead._id),
+        orderedIds: [first._id, first._id],
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      service.reorderCatalogMessages({
+        contactId: String(lead._id),
+        orderedIds: [first._id],
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      service.reorderCatalogMessages({
+        contactId: String(other._id),
+        orderedIds: [first._id, second._id],
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      service.reorderCatalogMessages({
+        contactId: new Types.ObjectId().toHexString(),
+        orderedIds: [first._id, second._id],
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    const lone = await service.createCatalogMessage({
+      title: 'Solo',
+      body: 'Uno solo',
+      assignedContactId: String(other._id),
+    });
+    expect(lone.sortOrder).toBe(1);
+    const beforeLone = sendInteractive.mock.calls.length;
+    await service.sendCatalogMessage(lone._id, {
+      contactId: String(other._id),
+    });
+    await service.recordInboundMessage({
+      phone: other.phone,
+      body: 'fin',
+    });
+    expect(sendInteractive.mock.calls.length).toBe(beforeLone + 1);
+
+    await service.updateCatalogMessage(first._id, { assignedContactId: '' });
+    expect(
+      (await service.listCatalogMessages()).find((row) => row._id === first._id)
+        ?.sortOrder,
+    ).toBe(0);
+    expect(
+      (await service.listCatalogMessages()).find(
+        (row) => row._id === second._id,
+      )?.sortOrder,
+    ).toBe(1);
+
+    await service.assignCatalogMessage(first._id, String(lead._id));
+    expect(
+      (await service.listCatalogMessages()).find((row) => row._id === first._id)
+        ?.sortOrder,
+    ).toBe(2);
+
+    const legacy = await catalog.create({
+      title: 'Legacy',
+      body: 'sin orden',
+      assignedContactId: other._id,
+      sortOrder: 0,
+      active: true,
+    });
+    await catalog.create({
+      title: 'Legacy2',
+      body: 'sin orden 2',
+      assignedContactId: other._id,
+      sortOrder: 0,
+      active: true,
+    });
+    const listed = await service.listCatalogMessages();
+    expect(
+      listed
+        .filter((row) => row.assignedContactId === String(other._id))
+        .every((row) => row.sortOrder >= 1),
+    ).toBe(true);
+    expect(legacy.sortOrder).toBeGreaterThan(0);
+
+    await service.deleteCatalogMessage(second._id);
+    expect(
+      (await service.listCatalogMessages()).find((row) => row._id === first._id)
+        ?.sortOrder,
+    ).toBe(1);
   });
 
   it('records outbound staff messages on test-send and remind', async () => {

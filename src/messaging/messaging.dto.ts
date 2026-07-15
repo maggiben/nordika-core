@@ -301,6 +301,17 @@ export class AssignCatalogMessageDto {
   contactId!: string;
 }
 
+export class ReorderCatalogMessagesDto {
+  @IsString()
+  @Length(1, 64)
+  contactId!: string;
+
+  @IsArray()
+  @ArrayMaxSize(100)
+  @IsString({ each: true })
+  orderedIds!: string[];
+}
+
 export class SendCatalogMessageDto {
   @IsOptional()
   @IsString()

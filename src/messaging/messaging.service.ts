@@ -109,6 +109,7 @@ export interface StaffCatalogRow {
   assignedContactId: string | null;
   assignedLabel: string | null;
   assignedPhone: string | null;
+  sortOrder: number;
   active: boolean;
   lastSentAt: string | null;
   repliedAt: string | null;
@@ -687,10 +688,14 @@ export class MessagingService {
         throw new NotFoundException('Assigned contact not found.');
       }
     }
+    const sortOrder = assignedContactId
+      ? await this.nextCatalogSortOrder(assignedContactId)
+      : 0;
     const created = await this.catalog.create({
       title: dto.title.trim(),
       body: dto.body,
       assignedContactId,
+      sortOrder,
       active: dto.active ?? true,
     });
     await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.catalog]);
@@ -698,10 +703,26 @@ export class MessagingService {
   }
 
   async listCatalogMessages(): Promise<StaffCatalogRow[]> {
-    const items = await this.catalog
-      .find({ active: true })
-      .sort({ updatedAt: -1 })
-      .exec();
+    const items = await this.catalog.find({ active: true }).exec();
+    await this.backfillCatalogSortOrders(items);
+    items.sort((left, right) => {
+      const leftKey = left.assignedContactId
+        ? String(left.assignedContactId)
+        : '';
+      const rightKey = right.assignedContactId
+        ? String(right.assignedContactId)
+        : '';
+      if (leftKey !== rightKey) {
+        if (!leftKey) {
+          return 1;
+        }
+        if (!rightKey) {
+          return -1;
+        }
+        return leftKey.localeCompare(rightKey);
+      }
+      return (left.sortOrder ?? 0) - (right.sortOrder ?? 0);
+    });
     const rows: StaffCatalogRow[] = [];
     for (const item of items) {
       rows.push(await this.toCatalogRow(item));
@@ -729,16 +750,31 @@ export class MessagingService {
       doc.active = dto.active;
     }
     if (dto.assignedContactId !== undefined) {
+      const previousAssignee = doc.assignedContactId
+        ? String(doc.assignedContactId)
+        : null;
       if (!dto.assignedContactId.trim()) {
         doc.assignedContactId = undefined;
+        doc.sortOrder = 0;
       } else {
-        doc.assignedContactId = this.toObjectId(
-          dto.assignedContactId,
-          'contact',
+        const nextId = this.toObjectId(dto.assignedContactId, 'contact');
+        doc.assignedContactId = nextId;
+        if (previousAssignee !== String(nextId)) {
+          doc.sortOrder = await this.nextCatalogSortOrder(nextId);
+        }
+      }
+      if (doc.save) {
+        await doc.save();
+      }
+      if (
+        previousAssignee &&
+        previousAssignee !== String(doc.assignedContactId ?? '')
+      ) {
+        await this.renumberCatalogBucket(
+          this.toObjectId(previousAssignee, 'contact'),
         );
       }
-    }
-    if (doc.save) {
+    } else if (doc.save) {
       await doc.save();
     }
     await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.catalog]);
@@ -749,14 +785,51 @@ export class MessagingService {
     id: string,
     contactId: string,
   ): Promise<StaffCatalogRow> {
-    await this.updateCatalogMessage(id, { assignedContactId: contactId });
-    const refreshed = await this.catalog
-      .findById(this.toObjectId(id, 'catalog message'))
-      .exec();
-    if (!refreshed) {
-      throw new NotFoundException('Catalog message not found.');
+    return this.updateCatalogMessage(id, { assignedContactId: contactId });
+  }
+
+  async reorderCatalogMessages(dto: {
+    contactId: string;
+    orderedIds: string[];
+  }): Promise<StaffCatalogRow[]> {
+    const contactOid = this.toObjectId(dto.contactId, 'contact');
+    const contact = await this.contacts.findById(contactOid).exec();
+    if (!contact) {
+      throw new NotFoundException('Contact not found.');
     }
-    return this.toCatalogRow(refreshed);
+    const orderedIds = dto.orderedIds.map((id) => id.trim()).filter(Boolean);
+    if (orderedIds.length === 0) {
+      throw new BadRequestException('orderedIds must not be empty.');
+    }
+    const unique = new Set(orderedIds);
+    if (unique.size !== orderedIds.length) {
+      throw new BadRequestException('orderedIds must be unique.');
+    }
+    const siblings = await this.catalog
+      .find({ active: true, assignedContactId: contactOid })
+      .exec();
+    if (siblings.length !== orderedIds.length) {
+      throw new BadRequestException(
+        'orderedIds must include every active message for this contact.',
+      );
+    }
+    const byId = new Map(siblings.map((item) => [String(item._id), item]));
+    for (const id of orderedIds) {
+      if (!byId.has(id)) {
+        throw new BadRequestException(
+          `Catalog message ${id} is not assigned to this contact.`,
+        );
+      }
+    }
+    for (let index = 0; index < orderedIds.length; index += 1) {
+      const item = byId.get(orderedIds[index])!;
+      item.sortOrder = index + 1;
+      if (item.save) {
+        await item.save();
+      }
+    }
+    await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.catalog]);
+    return this.listCatalogMessages();
   }
 
   async deleteCatalogMessage(id: string): Promise<{ ok: true }> {
@@ -766,9 +839,18 @@ export class MessagingService {
     if (!doc || !doc.active) {
       throw new NotFoundException('Catalog message not found.');
     }
+    const previousAssignee = doc.assignedContactId
+      ? String(doc.assignedContactId)
+      : null;
     doc.active = false;
+    doc.sortOrder = 0;
     if (doc.save) {
       await doc.save();
+    }
+    if (previousAssignee) {
+      await this.renumberCatalogBucket(
+        this.toObjectId(previousAssignee, 'contact'),
+      );
     }
     await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.catalog]);
     return { ok: true };
@@ -989,9 +1071,20 @@ export class MessagingService {
     }
 
     const sentAt = new Date();
+    const siblings = catalogMessage.assignedContactId
+      ? await this.catalog
+          .find({
+            active: true,
+            assignedContactId: catalogMessage.assignedContactId,
+          })
+          .exec()
+      : [catalogMessage];
+    const total = Math.max(1, siblings.length);
+    const step = Math.max(1, catalogMessage.sortOrder || 1);
+    const labeledTitle = `${step}/${total} · ${catalogMessage.title}`;
     const interactive: InteractiveTemplateBody = {
       text: catalogMessage.body,
-      title: catalogMessage.title,
+      title: labeledTitle,
       widgets: [],
     };
     const language = normalizeLanguage(
@@ -1010,7 +1103,7 @@ export class MessagingService {
         contactId: contact._id,
         phone: contact.phone,
         direction: 'outbound',
-        title: catalogMessage.title,
+        title: labeledTitle,
         body: catalogMessage.body,
         catalogMessageId: catalogMessage._id,
         status: 'sent',
@@ -1022,6 +1115,10 @@ export class MessagingService {
       });
       if (!catalogMessage.assignedContactId) {
         catalogMessage.assignedContactId = contact._id;
+        catalogMessage.sortOrder =
+          catalogMessage.sortOrder && catalogMessage.sortOrder > 0
+            ? catalogMessage.sortOrder
+            : await this.nextCatalogSortOrder(contact._id);
         if (catalogMessage.save) {
           await catalogMessage.save();
         }
@@ -1041,7 +1138,7 @@ export class MessagingService {
         contactId: contact._id,
         phone: contact.phone,
         direction: 'outbound',
-        title: catalogMessage.title,
+        title: labeledTitle,
         body: catalogMessage.body,
         catalogMessageId: catalogMessage._id,
         status: 'failed',
@@ -1257,6 +1354,21 @@ export class MessagingService {
           error instanceof Error ? error.message : 'Unknown flow advance error';
         this.logger.error(
           `Failed to advance flow run ${String(openThread.flowRunId)}: ${message}`,
+        );
+      }
+    } else if (
+      openThread?.catalogMessageId &&
+      openThread.source === 'catalog'
+    ) {
+      try {
+        await this.advanceCatalogAfterReply(openThread);
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Unknown catalog advance error';
+        this.logger.error(
+          `Failed to advance catalog sequence after ${String(openThread.catalogMessageId)}: ${message}`,
         );
       }
     }
@@ -2083,12 +2195,113 @@ export class MessagingService {
         : null,
       assignedLabel,
       assignedPhone,
+      sortOrder: item.sortOrder ?? 0,
       active: item.active,
       lastSentAt: sentAt ? sentAt.toISOString() : null,
       repliedAt: last?.repliedAt ? last.repliedAt.toISOString() : null,
       responseLatencyMs: latencyMs,
       responseStatus,
     };
+  }
+
+  private async nextCatalogSortOrder(
+    contactId: Types.ObjectId,
+  ): Promise<number> {
+    const siblings = await this.catalog
+      .find({ active: true, assignedContactId: contactId })
+      .exec();
+    return (
+      siblings.reduce((max, item) => Math.max(max, item.sortOrder ?? 0), 0) + 1
+    );
+  }
+
+  private async renumberCatalogBucket(
+    contactId: Types.ObjectId,
+  ): Promise<void> {
+    const siblings = await this.catalog
+      .find({ active: true, assignedContactId: contactId })
+      .exec();
+    siblings.sort(
+      (left, right) =>
+        (left.sortOrder ?? 0) - (right.sortOrder ?? 0) ||
+        String(left._id).localeCompare(String(right._id)),
+    );
+    for (let index = 0; index < siblings.length; index += 1) {
+      const nextOrder = index + 1;
+      if (siblings[index].sortOrder !== nextOrder) {
+        siblings[index].sortOrder = nextOrder;
+        if (siblings[index].save) {
+          await siblings[index].save();
+        }
+      }
+    }
+  }
+
+  private async backfillCatalogSortOrders(
+    items: StaffCatalogMessageDocument[],
+  ): Promise<void> {
+    const byContact = new Map<string, StaffCatalogMessageDocument[]>();
+    for (const item of items) {
+      if (!item.assignedContactId) {
+        if (!item.sortOrder) {
+          item.sortOrder = 0;
+        }
+        continue;
+      }
+      const key = String(item.assignedContactId);
+      const list = byContact.get(key) ?? [];
+      list.push(item);
+      byContact.set(key, list);
+    }
+    for (const [, list] of byContact) {
+      const needsBackfill = list.some((item) => !(item.sortOrder > 0));
+      if (!needsBackfill) {
+        continue;
+      }
+      list.sort(
+        (left, right) =>
+          (left.sortOrder ?? 0) - (right.sortOrder ?? 0) ||
+          String(left._id).localeCompare(String(right._id)),
+      );
+      for (let index = 0; index < list.length; index += 1) {
+        list[index].sortOrder = index + 1;
+        if (list[index].save) {
+          await list[index].save();
+        }
+      }
+    }
+  }
+
+  private async advanceCatalogAfterReply(
+    openThread: StaffMessageDocument,
+  ): Promise<void> {
+    if (!openThread.catalogMessageId) {
+      return;
+    }
+    const current = await this.catalog
+      .findById(openThread.catalogMessageId)
+      .exec();
+    if (!current?.assignedContactId || !current.active) {
+      return;
+    }
+    const nextOrder = (current.sortOrder ?? 0) + 1;
+    if (nextOrder < 2) {
+      return;
+    }
+    const next = (
+      await this.catalog
+        .find({
+          active: true,
+          assignedContactId: current.assignedContactId,
+        })
+        .exec()
+    ).find((item) => (item.sortOrder ?? 0) === nextOrder);
+    if (!next) {
+      return;
+    }
+    await this.sendCatalogMessage(String(next._id), {
+      contactId: String(current.assignedContactId),
+    });
   }
 
   /** Match contacts even when WhatsApp JIDs omit/include country or mobile `9`. */

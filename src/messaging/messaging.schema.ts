@@ -111,6 +111,8 @@ export interface StaffCatalogMessage {
   /** Full message body. Never truncated in storage. */
   body: string;
   assignedContactId?: Types.ObjectId;
+  /** 1-based order within the assigned contact bucket; 0 when unassigned. */
+  sortOrder: number;
   active: boolean;
 }
 
@@ -348,6 +350,7 @@ export const staffCatalogMessageSchema: Schema<StaffCatalogMessage> =
         ref: WHATSAPP_CONTACT_MODEL,
         index: true,
       },
+      sortOrder: { type: Number, required: true, default: 0, min: 0 },
       active: { type: Boolean, required: true, default: true },
     },
     { timestamps: true },

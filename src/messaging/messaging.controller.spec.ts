@@ -21,6 +21,7 @@ describe('MessagingController', () => {
   const assignCatalogMessage = jest.fn();
   const sendCatalogMessage = jest.fn();
   const deleteCatalogMessage = jest.fn();
+  const reorderCatalogMessages = jest.fn();
   const listFlows = jest.fn();
   const createFlow = jest.fn();
   const listFlowRuns = jest.fn();
@@ -53,6 +54,7 @@ describe('MessagingController', () => {
     assignCatalogMessage,
     sendCatalogMessage,
     deleteCatalogMessage,
+    reorderCatalogMessages,
     listFlows,
     createFlow,
     listFlowRuns,
@@ -111,6 +113,10 @@ describe('MessagingController', () => {
     await controller.updateCatalogMessage('id', { title: 'Nuevo' });
     await controller.assignCatalogMessage('id', { contactId: 'c1' });
     await controller.sendCatalogMessage('id', { contactId: 'c1' });
+    await controller.reorderCatalogMessages({
+      contactId: 'c1',
+      orderedIds: ['id'],
+    });
     await controller.deleteCatalogMessage('id');
     await controller.listFlows();
     await controller.createFlow({
@@ -156,6 +162,10 @@ describe('MessagingController', () => {
     expect(listStaffRoster).toHaveBeenCalled();
     expect(createCatalogMessage).toHaveBeenCalled();
     expect(sendCatalogMessage).toHaveBeenCalledWith('id', { contactId: 'c1' });
+    expect(reorderCatalogMessages).toHaveBeenCalledWith({
+      contactId: 'c1',
+      orderedIds: ['id'],
+    });
     expect(deleteCatalogMessage).toHaveBeenCalledWith('id');
     expect(listFlows).toHaveBeenCalled();
     expect(startFlow).toHaveBeenCalledWith('flow1', { contactId: 'c1' });
