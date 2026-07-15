@@ -108,7 +108,6 @@ export class MessagingController {
   }
 
   @Get('roster')
-  @CacheTTL(CACHE_TTLS.MESSAGING_DYNAMIC_MS)
   listStaffRoster() {
     return this.messaging.listStaffRoster();
   }
@@ -119,7 +118,6 @@ export class MessagingController {
   }
 
   @Get('catalog')
-  @CacheTTL(CACHE_TTLS.MESSAGING_DYNAMIC_MS)
   listCatalogMessages() {
     return this.messaging.listCatalogMessages();
   }
