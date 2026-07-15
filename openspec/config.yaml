@@ -1,0 +1,30 @@
+schema: spec-driven
+
+context: |
+  Tech stack: NestJS 11, TypeScript, Express, Mongoose, MongoDB, pnpm, Jest,
+  and Supertest.
+  Architecture: AppModule is the composition root. Controllers own HTTP
+  translation; services own use-case behavior. Add domains under src/<domain>/.
+  Existing public API: GET / returns "Hello World!". POST /sources accepts a
+  multipart file field named "file", validates JSON, and persists it when
+  MONGO_URI or MONGO_URL is configured.
+  Testing: co-locate unit specs in src/ and keep public route coverage in test/.
+  Run pnpm run build, pnpm exec jest --runInBand, and
+  pnpm exec jest --config ./test/jest-e2e.json --runInBand.
+  Security: do not commit secrets or .env files; treat all input as untrusted;
+  preserve safe error responses.
+  Project guidance: .ai/constitution.md, .ai/architecture.md, and
+  .ai/constraints/ define repository conventions.
+
+rules:
+  proposal:
+    - State the motivation, scope, non-goals, compatibility impact, and affected capabilities.
+    - Do not authorize implementation before requirements and scenarios are reviewable.
+  specs:
+    - Use normative SHALL or MUST requirements with Given/When/Then scenarios.
+    - Keep specifications implementation-independent unless an interface contract requires detail.
+  design:
+    - Record decisions, alternatives, data-model impact, security considerations, and rollback strategy.
+  tasks:
+    - Include implementation, tests, documentation, and validation commands.
+    - Order tasks so every public behavior is tested before the change is archived.

@@ -9,4 +9,4 @@ nodika/                  # workspace wrapper; no manifest or Git metadata
   .ai/       project-specific AI development framework
 ```
 
-For a new domain, prefer `src/<domain>/` with module, controller, service, DTOs, and unit specs. Import its module from `src/app.module.ts`.
+For a new domain, prefer `src/<domain>/` with module, controller, service, DTOs, and unit specs. The `src/sources/` module is the current example. Import each domain module from `src/app.module.ts`.

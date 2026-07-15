@@ -5,3 +5,4 @@
 - Await asynchronous work or intentionally prefix fire-and-forget promises with `void`, as in `src/main.ts`.
 - Preserve strict null checks, decorators, metadata emission, NodeNext module settings, and ES2023 target unless a compatibility plan is included.
 - Match `.prettierrc`: single quotes and trailing commas.
+- Use Nest file suffixes (`*.module.ts`, `*.controller.ts`, `*.service.ts`, `*.spec.ts`), lowercase kebab-case folders/routes, PascalCase classes, and camelCase functions and values.

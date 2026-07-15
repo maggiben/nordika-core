@@ -1,13 +1,36 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { MongoModule } from './mongo/mongo.module';
-import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
+import { RedisCacheModule } from './cache/redis-cache.module';
+import { MongoModule } from './mongo/mongo.module';
+import { SourcesModule } from './sources/sources.module';
 
 @Module({
-  imports: [MongoModule.register(), UsersModule, AuthModule],
+  imports: [
+    MongoModule.register(),
+    RedisCacheModule.register(),
+    AuthModule.register(),
+    SourcesModule,
+    ThrottlerModule.forRoot({
+      throttlers: [
+        {
+          limit: 60,
+          name: 'default',
+          ttl: 60_000,
+        },
+      ],
+    }),
+  ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+  ],
 })
 export class AppModule {}
