@@ -868,6 +868,65 @@ describe('MessagingService', () => {
     expect(sendInteractive).toHaveBeenCalledTimes(3);
   });
 
+  it('does not skip step 1 when it was closed only by a placeholder ack reply', async () => {
+    const lead = await contacts.create({
+      phone: '5491777777777',
+      label: 'Capataz stale',
+      active: true,
+      tags: ['staff'],
+    });
+    const first = await service.createCatalogMessage({
+      title: 'Paso1',
+      body: 'Pregunta 1',
+      assignedContactId: String(lead._id),
+    });
+    const second = await service.createCatalogMessage({
+      title: 'Paso2',
+      body: 'Pregunta 2',
+      assignedContactId: String(lead._id),
+    });
+
+    const firstOutbound = {
+      _id: new Types.ObjectId(),
+      contactId: lead._id,
+      phone: lead.phone,
+      direction: 'outbound',
+      body: first.body,
+      status: 'sent',
+      source: 'catalog',
+      catalogMessageId: new Types.ObjectId(first._id),
+      sentAt: new Date(Date.now() - 120_000),
+      repliedAt: new Date(Date.now() - 60_000),
+      replyBody: '(respuesta recibida)',
+      title: '1/2 · Paso1',
+      responseStatus: 'pending',
+      save: () => Promise.resolve(null as never),
+    };
+    messages.store.push(firstOutbound);
+    messages.store.push({
+      _id: new Types.ObjectId(),
+      contactId: lead._id,
+      phone: lead.phone,
+      direction: 'outbound',
+      body: second.body,
+      status: 'sent',
+      source: 'catalog',
+      catalogMessageId: new Types.ObjectId(second._id),
+      sentAt: new Date(Date.now() - 90_000),
+      title: '2/2 · Paso2',
+      save: () => Promise.resolve(null as never),
+    });
+
+    const before = sendInteractive.mock.calls.length;
+    const batch = await service.sendAssignedCatalogMessages();
+    expect(batch.sent).toBe(1);
+    expect(sendInteractive.mock.calls.length).toBe(before + 1);
+    const sentBody = String(sendInteractive.mock.calls.at(-1)?.[1]?.text ?? '');
+    expect(sentBody).toBe('Pregunta 1');
+    expect(firstOutbound.repliedAt).toBeUndefined();
+    expect(firstOutbound.replyBody).toBeUndefined();
+  });
+
   it('advances to the next catalog step after a reply even if later steps were already blasted', async () => {
     const lead = await contacts.create({
       phone: '5491444444444',

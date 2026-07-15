@@ -881,8 +881,19 @@ export class MessagingService {
           })
           .exec()
       : [catalogMessage];
-    const total = Math.max(1, siblings.length);
-    const step = Math.max(1, catalogMessage.sortOrder || 1);
+    const orderedSiblings = [...siblings].sort(
+      (left, right) =>
+        (left.sortOrder ?? 0) - (right.sortOrder ?? 0) ||
+        String(left._id).localeCompare(String(right._id)),
+    );
+    const stepIndex = orderedSiblings.findIndex(
+      (item) => String(item._id) === String(catalogMessage._id),
+    );
+    const total = Math.max(1, orderedSiblings.length);
+    const step =
+      stepIndex >= 0
+        ? stepIndex + 1
+        : Math.max(1, catalogMessage.sortOrder || 1);
     const labeledTitle = `${step}/${total} · ${catalogMessage.title}`;
     const interactive: InteractiveTemplateBody = {
       text: catalogMessage.body,
@@ -1089,7 +1100,9 @@ export class MessagingService {
       .exec();
     const windowStart = repliedAt.getTime() - this.replyMatchWindowMs;
     const openCandidates = recentOutbound.filter((item) => {
-      if (item.repliedAt) {
+      // Placeholder / ack closures must stay matchable so step 1 is not
+      // skipped in favor of a later flooded step.
+      if (this.isCatalogOutboundComplete(item)) {
         return false;
       }
       const sentAt =
@@ -1926,13 +1939,54 @@ export class MessagingService {
       .sort({ sentAt: -1, createdAt: -1 })
       .limit(1)
       .exec();
-    if (latestNext[0] && !latestNext[0].repliedAt) {
+    if (latestNext[0] && !this.isCatalogOutboundComplete(latestNext[0])) {
       return;
     }
 
     await this.sendCatalogMessage(String(next._id), {
       contactId: String(current.assignedContactId),
     });
+  }
+
+  /**
+   * A catalog step only counts as answered when the lead sent real text.
+   * Empty/ack webhooks used to stamp repliedAt with "(respuesta recibida)" and
+   * that falsely skipped step 1 on the next schedule tick.
+   */
+  private isCatalogOutboundComplete(
+    message: Pick<StaffMessageDocument, 'repliedAt' | 'replyBody'>,
+  ): boolean {
+    if (!message.repliedAt) {
+      return false;
+    }
+    const body = (message.replyBody ?? '').trim();
+    return body.length > 0 && body !== '(respuesta recibida)';
+  }
+
+  /**
+   * Re-open outbound rows closed only by ack/placeholder text so they can be
+   * matched again and remind step 1 instead of jumping to step 2.
+   */
+  private async reopenPlaceholderCatalogClose(
+    message: StaffMessageDocument,
+  ): Promise<void> {
+    if (this.isCatalogOutboundComplete(message) || !message.repliedAt) {
+      return;
+    }
+    message.repliedAt = undefined;
+    message.replyBody = undefined;
+    message.responseLatencyMs = undefined;
+    message.responseStatus = 'pending';
+    if (message.save) {
+      await message.save();
+      return;
+    }
+    await this.messages
+      .findByIdAndUpdate(message._id, {
+        $unset: { repliedAt: 1, replyBody: 1, responseLatencyMs: 1 },
+        responseStatus: 'pending',
+      })
+      .exec();
   }
 
   /**
@@ -1981,7 +2035,8 @@ export class MessagingService {
       if (!last) {
         return { next: item, awaitingReply: false };
       }
-      if (!last.repliedAt) {
+      if (!this.isCatalogOutboundComplete(last)) {
+        await this.reopenPlaceholderCatalogClose(last);
         // Keep reminding this step; do not advance to later flooded steps.
         return { next: item, awaitingReply: true };
       }
