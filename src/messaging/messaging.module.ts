@@ -14,6 +14,7 @@ import { getMessagingModelDefinitions } from './messaging.models';
 import { MessagingScheduler } from './messaging.scheduler';
 import { MessagingWebhookController } from './messaging.webhook.controller';
 import { MessagingService } from './messaging.service';
+import { ProgressParseService } from './progress-parse.service';
 
 @Module({})
 export class MessagingModule {
@@ -38,6 +39,7 @@ export class MessagingModule {
       providers: [
         LocaleService,
         EvolutionClient,
+        ProgressParseService,
         MessagingService,
         MessagingScheduler,
       ],

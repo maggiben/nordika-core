@@ -334,6 +334,10 @@ Canonical example: [`.env.example`](.env.example). Behavior details: [`.ai/docs/
 | `EVOLUTION_INSTANCE` | With other Evolution vars | |
 | `EVOLUTION_WEBHOOK_SECRET` | No | Shared secret for Evolution webhook header |
 | `WHATSAPP_DEFAULT_LANGUAGE` | No | `es` (default) or `en` |
+| `OPENAI_API_KEY` | No | When set, inbound catalog/task replies are parsed into structured progress via OpenAI (default provider) |
+| `OPENAI_PROGRESS_MODEL` | No | Chat model for OpenAI progress parsing (default `gpt-4o-mini`) |
+| `ANTHROPIC_API_KEY` | No | When set and account `progressAi.provider` is `anthropic`, inbound progress uses Anthropic instead of OpenAI |
+| `ANTHROPIC_PROGRESS_MODEL` | No | Chat model for Anthropic progress parsing (default `claude-sonnet-4-5`) |
 | `WHATSAPP_WEEKLY_CRON` / `WHATSAPP_TIMEZONE` | — | **Deprecated / ignored**; schedules use each account’s `emailNotificationSchedule` |
 
 Rate limits: 60 requests / 60s per IP by default; `POST /sources` is 10 / 60s.

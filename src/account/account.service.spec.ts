@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import {
   AccountService,
   computeNextSendDates,
@@ -223,6 +223,83 @@ describe('AccountService', () => {
     expect(result.activeProjectId).toBeNull();
     expect(result.emailSchedule.enabled).toBe(true);
     expect(Array.isArray(result.nextSendDates)).toBe(true);
+    expect(result).not.toHaveProperty('progressAi');
+  });
+
+  it('returns progressAi when configured on the account', async () => {
+    accounts.findById.mockResolvedValue({
+      email: 'person@example.com',
+      language: 'es',
+      progressAi: { provider: 'anthropic', model: 'claude-sonnet-4-5' },
+      emailNotificationSchedule: {
+        enabled: false,
+        frequency: 'weekly',
+        daysOfWeek: [1],
+        dayOfMonth: 1,
+        sendTime: '09:00',
+        timezone: 'America/Argentina/Buenos_Aires',
+      },
+    });
+
+    const result = await service.getSettings('507f1f77bcf86cd799439011');
+    expect(result.progressAi).toEqual({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-5',
+    });
+  });
+
+  it('updates progressAi settings', async () => {
+    accounts.findById.mockResolvedValue({
+      email: 'person@example.com',
+      language: 'es',
+      emailNotificationSchedule: {
+        enabled: false,
+        frequency: 'weekly',
+        daysOfWeek: [1],
+        dayOfMonth: 1,
+        sendTime: '09:00',
+        timezone: 'America/Argentina/Buenos_Aires',
+      },
+    });
+    accounts.findByIdAndUpdate.mockResolvedValue({
+      email: 'person@example.com',
+      language: 'es',
+      progressAi: { provider: 'openai', model: 'gpt-4o' },
+    });
+
+    const result = await service.updateSettings('507f1f77bcf86cd799439011', {
+      progressAi: { provider: 'openai', model: 'gpt-4o' },
+    });
+
+    expect(result.progressAi).toEqual({
+      provider: 'openai',
+      model: 'gpt-4o',
+    });
+    const updateCall = accounts.findByIdAndUpdate.mock.calls[0] as
+      | [
+          unknown,
+          { $set?: { progressAi?: { provider: string; model: string } } },
+          unknown?,
+        ]
+      | undefined;
+    expect(updateCall?.[1].$set?.progressAi).toEqual({
+      provider: 'openai',
+      model: 'gpt-4o',
+    });
+  });
+
+  it('rejects disallowed progressAi models for the provider', async () => {
+    accounts.findById.mockResolvedValue({
+      email: 'person@example.com',
+      language: 'es',
+      emailNotificationSchedule: null,
+    });
+
+    await expect(
+      service.updateSettings('507f1f77bcf86cd799439011', {
+        progressAi: { provider: 'anthropic', model: 'gpt-4o' },
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('rejects missing accounts when reading settings', async () => {

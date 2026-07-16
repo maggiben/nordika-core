@@ -19,6 +19,10 @@ describe('cache.constants', () => {
     expect(MESSAGING_CACHE_PATHS.dispatches('abc')).toBe(
       '/messaging/dispatches?cicloId=abc',
     );
+    expect(MESSAGING_CACHE_PATHS.progress()).toBe('/messaging/progress');
+    expect(MESSAGING_CACHE_PATHS.progress('obra-1')).toBe(
+      '/messaging/progress?projectId=obra-1',
+    );
   });
 
   it('exposes cache TTL presets', () => {

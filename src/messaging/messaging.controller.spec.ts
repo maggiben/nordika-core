@@ -14,6 +14,7 @@ describe('MessagingController', () => {
   const upsertWorkStatus = jest.fn();
   const listWorkStatuses = jest.fn();
   const listDispatches = jest.fn();
+  const listObraProgress = jest.fn();
   const listStaffRoster = jest.fn();
   const listTaskChecklists = jest.fn();
   const createCatalogMessage = jest.fn();
@@ -40,6 +41,7 @@ describe('MessagingController', () => {
     upsertWorkStatus,
     listWorkStatuses,
     listDispatches,
+    listObraProgress,
     listStaffRoster,
     listTaskChecklists,
     createCatalogMessage,
@@ -90,6 +92,7 @@ describe('MessagingController', () => {
     });
     await controller.listWorkStatuses('id');
     await controller.listDispatches('id');
+    await controller.listObraProgress('obra-1');
     await controller.listStaffRoster();
     await controller.listTaskChecklists('c1', 'slot-key');
     await controller.createCatalogMessage({
@@ -114,6 +117,7 @@ describe('MessagingController', () => {
 
     expect(runWeeklyStatusDispatch).toHaveBeenCalled();
     expect(upsertWorkStatus).toHaveBeenCalled();
+    expect(listObraProgress).toHaveBeenCalledWith('obra-1');
     expect(listStaffRoster).toHaveBeenCalled();
     expect(listTaskChecklists).toHaveBeenCalledWith({
       contactId: 'c1',

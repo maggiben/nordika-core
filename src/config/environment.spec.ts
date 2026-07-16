@@ -1,8 +1,10 @@
 import {
+  getAnthropicConfig,
   getAuthConfig,
   getEvolutionConfig,
   getJwtSecret,
   getMongoUri,
+  getOpenAIConfig,
   getPort,
   getRedisUrl,
 } from './environment';
@@ -104,6 +106,48 @@ describe('environment validation', () => {
       appUrl: 'https://app.example',
       resendApiKey: 're_test',
       resendFrom: 'Nodika <auth@example.com>',
+    });
+  });
+
+  it('leaves OpenAI disabled when the API key is unset', () => {
+    expect(getOpenAIConfig({})).toBeNull();
+    expect(getOpenAIConfig({ OPENAI_API_KEY: '   ' })).toBeNull();
+  });
+
+  it('defaults the OpenAI progress model when only the key is set', () => {
+    expect(getOpenAIConfig({ OPENAI_API_KEY: ' sk-test ' })).toEqual({
+      apiKey: 'sk-test',
+      progressModel: 'gpt-4o-mini',
+    });
+    expect(
+      getOpenAIConfig({
+        OPENAI_API_KEY: 'sk-test',
+        OPENAI_PROGRESS_MODEL: ' gpt-4o ',
+      }),
+    ).toEqual({
+      apiKey: 'sk-test',
+      progressModel: 'gpt-4o',
+    });
+  });
+
+  it('leaves Anthropic disabled when the API key is unset', () => {
+    expect(getAnthropicConfig({})).toBeNull();
+    expect(getAnthropicConfig({ ANTHROPIC_API_KEY: '   ' })).toBeNull();
+  });
+
+  it('defaults the Anthropic progress model when only the key is set', () => {
+    expect(getAnthropicConfig({ ANTHROPIC_API_KEY: ' sk-ant-test ' })).toEqual({
+      apiKey: 'sk-ant-test',
+      progressModel: 'claude-sonnet-4-5',
+    });
+    expect(
+      getAnthropicConfig({
+        ANTHROPIC_API_KEY: 'sk-ant-test',
+        ANTHROPIC_PROGRESS_MODEL: ' claude-haiku-4-5 ',
+      }),
+    ).toEqual({
+      apiKey: 'sk-ant-test',
+      progressModel: 'claude-haiku-4-5',
     });
   });
 });

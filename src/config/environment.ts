@@ -9,6 +9,14 @@ export interface Environment {
   JWT_SECRET?: string;
   MONGO_URI?: string;
   MONGO_URL?: string;
+  /** Optional; when unset, inbound progress parsing is a no-op. */
+  OPENAI_API_KEY?: string;
+  /** Optional chat model for progress parsing (default gpt-4o-mini). */
+  OPENAI_PROGRESS_MODEL?: string;
+  /** Optional; when unset with Anthropic selected, parsing fails closed. */
+  ANTHROPIC_API_KEY?: string;
+  /** Optional chat model for Anthropic progress parsing. */
+  ANTHROPIC_PROGRESS_MODEL?: string;
   PORT?: string;
   REDIS_URL?: string;
   RESEND_API_KEY?: string;
@@ -19,6 +27,16 @@ export interface Environment {
   WHATSAPP_TIMEZONE?: string;
   /** @deprecated Unused; schedules use account emailNotificationSchedule. */
   WHATSAPP_WEEKLY_CRON?: string;
+}
+
+export interface OpenAIConfig {
+  apiKey: string;
+  progressModel: string;
+}
+
+export interface AnthropicConfig {
+  apiKey: string;
+  progressModel: string;
 }
 
 export interface EvolutionConfig {
@@ -158,4 +176,41 @@ export function getWhatsAppDefaultLanguage(
 ): 'es' | 'en' {
   const value = environment.WHATSAPP_DEFAULT_LANGUAGE?.trim().toLowerCase();
   return value === 'en' ? 'en' : 'es';
+}
+
+/**
+ * Optional OpenAI settings for parsing WhatsApp progress replies.
+ * Missing key disables parsing without failing boot.
+ */
+export function getOpenAIConfig(
+  environment: Environment = process.env,
+): OpenAIConfig | null {
+  const apiKey = environment.OPENAI_API_KEY?.trim();
+  if (!apiKey) {
+    return null;
+  }
+
+  return {
+    apiKey,
+    progressModel: environment.OPENAI_PROGRESS_MODEL?.trim() || 'gpt-4o-mini',
+  };
+}
+
+/**
+ * Optional Anthropic settings for parsing WhatsApp progress replies.
+ * Missing key disables Anthropic parsing without failing boot.
+ */
+export function getAnthropicConfig(
+  environment: Environment = process.env,
+): AnthropicConfig | null {
+  const apiKey = environment.ANTHROPIC_API_KEY?.trim();
+  if (!apiKey) {
+    return null;
+  }
+
+  return {
+    apiKey,
+    progressModel:
+      environment.ANTHROPIC_PROGRESS_MODEL?.trim() || 'claude-sonnet-4-5',
+  };
 }

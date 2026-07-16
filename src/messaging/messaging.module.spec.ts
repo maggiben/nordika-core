@@ -1,6 +1,7 @@
 import { MessagingModule } from './messaging.module';
 import { EvolutionClient } from './evolution.client';
 import { LocaleService } from '../i18n/locale.service';
+import { ProgressParseService } from './progress-parse.service';
 
 describe('MessagingModule', () => {
   const originalMongo = process.env.MONGO_URI;
@@ -26,7 +27,11 @@ describe('MessagingModule', () => {
     const dynamic = MessagingModule.register();
     expect(dynamic.controllers?.length).toBe(2);
     expect(dynamic.providers).toEqual(
-      expect.arrayContaining([LocaleService, EvolutionClient]),
+      expect.arrayContaining([
+        LocaleService,
+        EvolutionClient,
+        ProgressParseService,
+      ]),
     );
   });
 });

@@ -88,6 +88,21 @@ export interface MessageDispatch {
   sentAt?: Date;
 }
 
+export interface StaffParsedProgress {
+  percent: number;
+  duration?: string;
+  avance?: string;
+  notes?: string;
+  byRole?: {
+    jefe_obra?: number;
+    operario?: number;
+    jornalero?: number;
+    otro?: number;
+  };
+  parsedAt: Date;
+  model?: string;
+}
+
 export interface StaffMessage {
   contactId: Types.ObjectId;
   phone: string;
@@ -106,6 +121,8 @@ export interface StaffMessage {
   questionMessageId?: Types.ObjectId;
   /** Full staff reply text when this outbound thread was answered. */
   replyBody?: string;
+  /** Structured progress extracted from replyBody (OpenAI). */
+  parsedProgress?: StaffParsedProgress;
   status: 'sent' | 'failed' | 'received';
   providerMessageId?: string;
   error?: string;
@@ -286,6 +303,20 @@ export const staffMessageSchema: Schema<StaffMessage> =
         index: true,
       },
       replyBody: { type: String },
+      parsedProgress: {
+        percent: { type: Number, min: 0, max: 100 },
+        duration: { type: String, trim: true },
+        avance: { type: String, trim: true },
+        notes: { type: String, trim: true },
+        byRole: {
+          jefe_obra: { type: Number, min: 0, max: 100 },
+          operario: { type: Number, min: 0, max: 100 },
+          jornalero: { type: Number, min: 0, max: 100 },
+          otro: { type: Number, min: 0, max: 100 },
+        },
+        parsedAt: { type: Date },
+        model: { type: String, trim: true },
+      },
       status: {
         type: String,
         required: true,

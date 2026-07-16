@@ -15,6 +15,10 @@ import {
   notificationSlotKey,
   catalogSlotStartsAt,
 } from '../account/schedule';
+import {
+  normalizeProgressAi,
+  type ProgressAiSettings,
+} from '../account/progress-ai';
 import { ACCOUNT_MODEL, AccountDocument } from '../auth/auth.schema';
 import { MESSAGING_CACHE_PATHS } from '../cache/cache.constants';
 import { OptionalCacheService } from '../cache/optional-cache.service';
@@ -59,6 +63,7 @@ import {
   StaffCatalogMessageDocument,
   StaffMessage,
   StaffMessageDocument,
+  StaffParsedProgress,
   TemplateWidget,
   WHATSAPP_CONTACT_MODEL,
   WORK_STATUS_MODEL,
@@ -71,6 +76,7 @@ import {
   mergeContactProjectIds,
   normalizeContactProjectIds,
 } from './contact-project-ids';
+import { ProgressParseService } from './progress-parse.service';
 import {
   computeResponseLatencyMs,
   responseStatusFromLatencyMs,
@@ -83,6 +89,40 @@ import {
   isDateWithinCiclo,
   renderTemplateText,
 } from './template.renderer';
+
+export type ObraProgressRole = 'jefe_obra' | 'operario' | 'jornalero' | 'otro';
+
+const OBRA_PROGRESS_ROLES: ObraProgressRole[] = [
+  'jefe_obra',
+  'operario',
+  'jornalero',
+  'otro',
+];
+
+export interface ObraProgressReport {
+  contactId: string;
+  role: ObraProgressRole;
+  taskId: string | null;
+  percent: number;
+  duration: string | null;
+  avance: string | null;
+  notes: string | null;
+  repliedAt: string;
+  messageId: string;
+}
+
+export interface ObraProgressSummary {
+  projectId: string;
+  overallPercent: number | null;
+  byRole: {
+    jefe_obra: number | null;
+    operario: number | null;
+    jornalero: number | null;
+    otro: number | null;
+  };
+  reports: ObraProgressReport[];
+  updatedAt: string | null;
+}
 
 export interface WeeklyDispatchSummary {
   cicloId: string;
@@ -167,6 +207,7 @@ export class MessagingService {
     private readonly evolution: EvolutionClient,
     private readonly cache: OptionalCacheService,
     private readonly locales: LocaleService,
+    private readonly progressParse: ProgressParseService,
   ) {}
 
   normalizePhone(phone: string): string {
@@ -486,6 +527,114 @@ export class MessagingService {
       .sort({ createdAt: -1 })
       .limit(200)
       .exec();
+  }
+
+  async listObraProgress(projectId: string): Promise<ObraProgressSummary> {
+    const trimmed = projectId?.trim();
+    if (!trimmed) {
+      throw new BadRequestException('projectId query parameter is required.');
+    }
+
+    const rows = (
+      await this.messages
+        .find({
+          projectId: trimmed,
+          direction: 'outbound',
+          parsedProgress: { $exists: true },
+        })
+        .sort({ repliedAt: -1 })
+        .exec()
+    )
+      .slice()
+      .sort((a, b) => {
+        const aTime =
+          (a.repliedAt ?? a.parsedProgress?.parsedAt)?.getTime() ?? 0;
+        const bTime =
+          (b.repliedAt ?? b.parsedProgress?.parsedAt)?.getTime() ?? 0;
+        return bTime - aTime;
+      });
+
+    const latestByKey = new Map<string, StaffMessageDocument>();
+    for (const row of rows) {
+      if (!row.parsedProgress) {
+        continue;
+      }
+      const key = `${String(row.contactId)}::${row.taskId ?? ''}`;
+      if (!latestByKey.has(key)) {
+        latestByKey.set(key, row);
+      }
+    }
+
+    const latestRows = [...latestByKey.values()];
+    const contactById = new Map<string, WhatsAppContactDocument>();
+    for (const row of latestRows) {
+      const contactId = String(row.contactId);
+      if (contactById.has(contactId)) {
+        continue;
+      }
+      const contact = await this.contacts.findById(row.contactId).exec();
+      if (contact) {
+        contactById.set(contactId, contact);
+      }
+    }
+
+    const roleBuckets: Record<ObraProgressRole, number[]> = {
+      jefe_obra: [],
+      operario: [],
+      jornalero: [],
+      otro: [],
+    };
+    const reports: ObraProgressReport[] = [];
+    let latestUpdatedMs: number | null = null;
+
+    for (const row of latestRows) {
+      const progress = row.parsedProgress as StaffParsedProgress;
+      const contact = contactById.get(String(row.contactId));
+      const role = resolveContactProgressRole(contact?.tags ?? []);
+      const repliedAt = row.repliedAt ?? progress.parsedAt ?? new Date(0);
+      const repliedAtIso = repliedAt.toISOString();
+      const updatedMs = repliedAt.getTime();
+      if (latestUpdatedMs === null || updatedMs > latestUpdatedMs) {
+        latestUpdatedMs = updatedMs;
+      }
+
+      reports.push({
+        contactId: String(row.contactId),
+        role,
+        taskId: row.taskId?.trim() ? row.taskId : null,
+        percent: progress.percent,
+        duration: progress.duration ?? null,
+        avance: progress.avance ?? null,
+        notes: progress.notes ?? null,
+        repliedAt: repliedAtIso,
+        messageId: String(row._id),
+      });
+
+      accumulateRolePercents(roleBuckets, progress);
+    }
+
+    reports.sort((a, b) => b.repliedAt.localeCompare(a.repliedAt));
+
+    const overallPercent =
+      reports.length === 0
+        ? null
+        : average(reports.map((report) => report.percent));
+
+    return {
+      projectId: trimmed,
+      overallPercent,
+      byRole: {
+        jefe_obra: averageOrNull(roleBuckets.jefe_obra),
+        operario: averageOrNull(roleBuckets.operario),
+        jornalero: averageOrNull(roleBuckets.jornalero),
+        otro: averageOrNull(roleBuckets.otro),
+      },
+      reports,
+      updatedAt:
+        latestUpdatedMs === null
+          ? null
+          : new Date(latestUpdatedMs).toISOString(),
+    };
   }
 
   async sendTestMessage(dto: TestSendDto): Promise<{
@@ -1318,6 +1467,49 @@ export class MessagingService {
       openThread.receivedAt = openThread.receivedAt ?? openThread.sentAt;
       openThread.responseLatencyMs = responseLatencyMs;
       openThread.responseStatus = responseStatus;
+
+      let parsedProgress: StaffParsedProgress | undefined;
+      if (
+        openThread.source === 'catalog' ||
+        openThread.source === 'task_checklist'
+      ) {
+        try {
+          const progressProjectId = openThread.projectId?.trim();
+          const progressAi = progressProjectId
+            ? await this.resolveProgressAiForProject(progressProjectId)
+            : undefined;
+          const parsed = await this.progressParse.parseReply({
+            replyBody,
+            taskId: openThread.taskId,
+            taskLabel: openThread.taskLabel,
+            outboundBody: openThread.body,
+            ...(progressAi ? { progressAi } : {}),
+          });
+          if (parsed) {
+            parsedProgress = {
+              percent: parsed.percent,
+              ...(parsed.duration !== undefined
+                ? { duration: parsed.duration }
+                : {}),
+              ...(parsed.avance !== undefined ? { avance: parsed.avance } : {}),
+              ...(parsed.notes !== undefined ? { notes: parsed.notes } : {}),
+              ...(parsed.byRole !== undefined ? { byRole: parsed.byRole } : {}),
+              parsedAt: repliedAt,
+              ...(parsed.model !== undefined ? { model: parsed.model } : {}),
+            };
+            openThread.parsedProgress = parsedProgress;
+          }
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : 'Unknown progress parse error';
+          this.logger.warn(
+            `Progress parse failed for thread ${String(openThread._id)}: ${message}`,
+          );
+        }
+      }
+
       if (openThread.save) {
         await openThread.save();
       } else {
@@ -1329,6 +1521,7 @@ export class MessagingService {
             responseLatencyMs,
             responseStatus,
             threadId,
+            ...(parsedProgress ? { parsedProgress } : {}),
           })
           .exec();
       }
@@ -1395,10 +1588,15 @@ export class MessagingService {
       }
     }
 
+    const progressProjectId = openThread?.projectId?.trim() || inboundProjectId;
     await this.cache.invalidatePaths([
       MESSAGING_CACHE_PATHS.roster,
       MESSAGING_CACHE_PATHS.catalog,
       MESSAGING_CACHE_PATHS.taskChecklist,
+      MESSAGING_CACHE_PATHS.progress(),
+      ...(progressProjectId
+        ? [MESSAGING_CACHE_PATHS.progress(progressProjectId)]
+        : []),
     ]);
     return {
       ok: true,
@@ -3018,6 +3216,18 @@ export class MessagingService {
   }
 
   /**
+   * Prefer progress AI settings from the account that has this obra active.
+   */
+  private async resolveProgressAiForProject(
+    projectId: string,
+  ): Promise<ProgressAiSettings | undefined> {
+    const account = await this.accounts
+      .findOne({ activeProjectId: projectId })
+      .exec();
+    return normalizeProgressAi(account?.progressAi);
+  }
+
+  /**
    * Match contacts even when WhatsApp JIDs omit/include country or mobile `9`.
    * When several records collide after multi-obra staffing, prefer the contact
    * that owns an open catalog outbound / catalog assignment so replies advance.
@@ -3098,4 +3308,45 @@ export class MessagingService {
     }
     return new Types.ObjectId(id);
   }
+}
+
+function resolveContactProgressRole(tags: string[]): ObraProgressRole {
+  for (const role of OBRA_PROGRESS_ROLES) {
+    if (tags.includes(role)) {
+      return role;
+    }
+  }
+  return 'jefe_obra';
+}
+
+function accumulateRolePercents(
+  buckets: Record<ObraProgressRole, number[]>,
+  progress: StaffParsedProgress,
+): void {
+  const byRole = progress.byRole;
+  const hasByRole =
+    !!byRole &&
+    OBRA_PROGRESS_ROLES.some((role) => typeof byRole[role] === 'number');
+  if (!hasByRole) {
+    buckets.jefe_obra.push(progress.percent);
+    return;
+  }
+  for (const role of OBRA_PROGRESS_ROLES) {
+    const value = byRole[role];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      buckets[role].push(value);
+    }
+  }
+}
+
+function average(values: number[]): number {
+  return (
+    Math.round(
+      (values.reduce((sum, value) => sum + value, 0) / values.length) * 10,
+    ) / 10
+  );
+}
+
+function averageOrNull(values: number[]): number | null {
+  return values.length === 0 ? null : average(values);
 }

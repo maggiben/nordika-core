@@ -26,4 +26,8 @@ export const MESSAGING_CACHE_PATHS = {
     cicloId
       ? `/messaging/dispatches?cicloId=${cicloId}`
       : '/messaging/dispatches',
+  progress: (projectId?: string) =>
+    projectId
+      ? `/messaging/progress?projectId=${projectId}`
+      : '/messaging/progress',
 } as const;

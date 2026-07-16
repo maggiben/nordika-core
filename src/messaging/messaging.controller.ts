@@ -112,6 +112,12 @@ export class MessagingController {
     return this.messaging.listDispatches(cicloId);
   }
 
+  @Get('progress')
+  @CacheTTL(CACHE_TTLS.MESSAGING_DYNAMIC_MS)
+  listObraProgress(@Query('projectId') projectId?: string) {
+    return this.messaging.listObraProgress(projectId ?? '');
+  }
+
   @Get('roster')
   listStaffRoster() {
     return this.messaging.listStaffRoster();

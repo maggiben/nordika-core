@@ -28,6 +28,7 @@ import { LocaleService } from '../i18n/locale.service';
 import { EvolutionClient } from './evolution.client';
 import { normalizeContactProjectIds } from './contact-project-ids';
 import { MessagingService } from './messaging.service';
+import { ProgressParseService } from './progress-parse.service';
 
 type LeanDoc<T> = T & {
   _id: Types.ObjectId;
@@ -321,6 +322,20 @@ describe('MessagingService', () => {
     receivedAt?: Date;
     repliedAt?: Date;
     replyBody?: string;
+    parsedProgress?: {
+      percent: number;
+      duration?: string;
+      avance?: string;
+      notes?: string;
+      byRole?: {
+        jefe_obra?: number;
+        operario?: number;
+        jornalero?: number;
+        otro?: number;
+      };
+      parsedAt: Date;
+      model?: string;
+    };
     responseLatencyMs?: number;
     responseStatus?: string;
     catalogMessageId?: Types.ObjectId;
@@ -330,6 +345,7 @@ describe('MessagingService', () => {
     taskId?: string;
     taskLabel?: string;
     sourceId?: Types.ObjectId;
+    projectId?: string;
     slotKey?: string;
     questionMessageId?: Types.ObjectId;
   }>();
@@ -389,6 +405,10 @@ describe('MessagingService', () => {
   } as unknown as OptionalCacheService;
 
   const locales = new LocaleService();
+  const parseReply = jest.fn(() => Promise.resolve(null));
+  const progressParse = {
+    parseReply,
+  } as unknown as ProgressParseService;
 
   let service: MessagingService;
 
@@ -415,6 +435,7 @@ describe('MessagingService', () => {
     invalidatePaths
       .mockReset()
       .mockImplementation(() => Promise.resolve(undefined));
+    parseReply.mockReset().mockResolvedValue(null);
 
     service = new MessagingService(
       contacts as never,
@@ -429,6 +450,7 @@ describe('MessagingService', () => {
       evolution,
       cache,
       locales,
+      progressParse,
     );
   });
 
@@ -1819,6 +1841,156 @@ describe('MessagingService', () => {
     expect(listed[0]?.lastSentAt).toBeTruthy();
     expect(listed[0]?.repliedAt).toBeTruthy();
     expect(listed[0]?.responseStatus).toBe('green');
+  });
+
+  it('persists parsedProgress on catalog replies when OpenAI returns data', async () => {
+    parseReply.mockResolvedValue({
+      percent: 45,
+      duration: '1 día',
+      avance: 'estructura',
+      notes: 'ok',
+      byRole: { operario: 40 },
+      model: 'gpt-4o-mini',
+    });
+    const contact = await contacts.create({
+      phone: '5491112345678',
+      label: 'Estructura',
+      active: true,
+      tags: ['staff'],
+      projectIds: ['obra-parse'],
+      projectId: 'obra-parse',
+    });
+    const catalogMessage = await service.createCatalogMessage({
+      title: 'Avance',
+      body: '¿Cómo va?',
+      assignedContactId: String(contact._id),
+    });
+    await service.sendCatalogMessage(catalogMessage._id, {
+      contactId: String(contact._id),
+    });
+    const outbound = messages.store.find(
+      (item) => item.direction === 'outbound',
+    );
+    expect(outbound).toBeTruthy();
+    if (outbound) {
+      outbound.projectId = 'obra-parse';
+      outbound.sentAt = new Date(Date.now() - 60_000);
+    }
+
+    await service.recordInboundMessage({
+      phone: '5491112345678',
+      body: 'Vamos al 45%',
+    });
+
+    expect(parseReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyBody: 'Vamos al 45%',
+        outboundBody: '¿Cómo va?',
+      }),
+    );
+    expect(outbound?.parsedProgress).toMatchObject({
+      percent: 45,
+      duration: '1 día',
+      avance: 'estructura',
+      model: 'gpt-4o-mini',
+    });
+  });
+
+  it('aggregates obra progress from latest parsed outbounds', async () => {
+    const jefe = await contacts.create({
+      phone: '5491111111111',
+      label: 'Jefe',
+      active: true,
+      tags: ['jefe_obra'],
+    });
+    const operario = await contacts.create({
+      phone: '5491122222222',
+      label: 'Operario',
+      active: true,
+      tags: ['operario'],
+    });
+    const older = new Date('2026-07-01T10:00:00Z');
+    const newer = new Date('2026-07-02T10:00:00Z');
+
+    await messages.create({
+      contactId: jefe._id,
+      phone: jefe.phone,
+      direction: 'outbound',
+      body: 'q1',
+      status: 'sent',
+      projectId: 'obra-1',
+      taskId: 'task-a',
+      repliedAt: older,
+      parsedProgress: {
+        percent: 10,
+        parsedAt: older,
+      },
+    });
+    await messages.create({
+      contactId: jefe._id,
+      phone: jefe.phone,
+      direction: 'outbound',
+      body: 'q1-new',
+      status: 'sent',
+      projectId: 'obra-1',
+      taskId: 'task-a',
+      repliedAt: newer,
+      parsedProgress: {
+        percent: 70,
+        avance: 'última',
+        parsedAt: newer,
+      },
+    });
+    await messages.create({
+      contactId: operario._id,
+      phone: operario.phone,
+      direction: 'outbound',
+      body: 'q2',
+      status: 'sent',
+      projectId: 'obra-1',
+      repliedAt: newer,
+      parsedProgress: {
+        percent: 50,
+        byRole: { operario: 60, jornalero: 40 },
+        parsedAt: newer,
+      },
+    });
+    await messages.create({
+      contactId: jefe._id,
+      phone: jefe.phone,
+      direction: 'outbound',
+      body: 'other project',
+      status: 'sent',
+      projectId: 'obra-other',
+      repliedAt: newer,
+      parsedProgress: {
+        percent: 99,
+        parsedAt: newer,
+      },
+    });
+
+    await expect(service.listObraProgress('')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+
+    const summary = await service.listObraProgress('obra-1');
+    expect(summary.projectId).toBe('obra-1');
+    expect(summary.reports).toHaveLength(2);
+    expect(summary.overallPercent).toBe(60);
+    expect(summary.byRole).toEqual({
+      jefe_obra: 70,
+      operario: 60,
+      jornalero: 40,
+      otro: null,
+    });
+    expect(summary.reports.map((r) => r.percent).sort()).toEqual([50, 70]);
+    expect(summary.reports.find((r) => r.taskId === 'task-a')?.avance).toBe(
+      'última',
+    );
+    expect(
+      summary.reports.find((r) => r.contactId === String(operario._id))?.role,
+    ).toBe('operario');
+    expect(summary.updatedAt).toBe(newer.toISOString());
   });
 
   it('updates, unassigns, and validates catalog send prerequisites', async () => {

@@ -10,7 +10,27 @@ import {
   Max,
   Min,
   ValidateIf,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  ANTHROPIC_PROGRESS_MODELS,
+  OPENAI_PROGRESS_MODELS,
+} from './progress-ai';
+
+const ALLOWED_PROGRESS_AI_MODELS = [
+  ...OPENAI_PROGRESS_MODELS,
+  ...ANTHROPIC_PROGRESS_MODELS,
+] as string[];
+
+export class ProgressAiSettingsDto {
+  @IsIn(['openai', 'anthropic'])
+  provider!: 'openai' | 'anthropic';
+
+  @IsString()
+  @IsIn(ALLOWED_PROGRESS_AI_MODELS)
+  model!: string;
+}
 
 export class UpdateAccountSettingsDto {
   @IsOptional()
@@ -54,6 +74,11 @@ export class UpdateAccountSettingsDto {
   @IsString()
   @Length(1, 120)
   activeProjectId?: string | null;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ProgressAiSettingsDto)
+  progressAi?: ProgressAiSettingsDto;
 }
 
 /** @deprecated Prefer UpdateAccountSettingsDto; kept for backward-compatible payloads. */

@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Account, ACCOUNT_MODEL } from '../auth/auth.schema';
@@ -11,6 +15,11 @@ import {
   UpdateAccountSettingsDto,
   UpdateEmailScheduleDto,
 } from './account.dto';
+import {
+  isAllowedProgressAiModel,
+  normalizeProgressAi,
+  type ProgressAiSettings,
+} from './progress-ai';
 import { computeNextSendDates, normalizeSchedule } from './schedule';
 
 export {
@@ -35,12 +44,14 @@ export class AccountService {
 
     const language = normalizeLanguage(account.language);
     const emailSchedule = normalizeSchedule(account.emailNotificationSchedule);
+    const progressAi = normalizeProgressAi(account.progressAi);
 
     return {
       email: account.email,
       language,
       languages: ['es', 'en'] as AppLanguage[],
       activeProjectId: account.activeProjectId ?? null,
+      ...(progressAi ? { progressAi } : {}),
       emailSchedule,
       nextSendDates: computeNextSendDates(emailSchedule),
     };
@@ -83,6 +94,11 @@ export class AccountService {
       }
     }
 
+    if ('progressAi' in dto && dto.progressAi !== undefined) {
+      const next = this.requireValidProgressAi(dto.progressAi);
+      set.progressAi = next;
+    }
+
     const update: Record<string, unknown> = { $set: set };
     if (Object.keys(unset).length > 0) {
       update.$unset = unset;
@@ -98,11 +114,14 @@ export class AccountService {
       throw new NotFoundException('Account not found.');
     }
 
+    const progressAi = normalizeProgressAi(updated.progressAi);
+
     return {
       email: updated.email,
       language,
       languages: ['es', 'en'] as AppLanguage[],
       activeProjectId: updated.activeProjectId ?? null,
+      ...(progressAi ? { progressAi } : {}),
       emailSchedule: schedule,
       nextSendDates: computeNextSendDates(schedule),
     };
@@ -111,5 +130,18 @@ export class AccountService {
   /** @deprecated Use updateSettings. */
   async updateSchedule(accountId: string, dto: UpdateEmailScheduleDto) {
     return this.updateSettings(accountId, dto);
+  }
+
+  private requireValidProgressAi(value: {
+    provider: 'openai' | 'anthropic';
+    model: string;
+  }): ProgressAiSettings {
+    const model = value.model.trim();
+    if (!isAllowedProgressAiModel(value.provider, model)) {
+      throw new BadRequestException(
+        `Model "${model}" is not allowed for provider "${value.provider}".`,
+      );
+    }
+    return { provider: value.provider, model };
   }
 }

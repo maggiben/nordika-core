@@ -20,6 +20,11 @@ export interface Account {
   emailNotificationSchedule?: EmailNotificationSchedule;
   /** Dedup key for the last scheduled notification slot that was claimed. */
   lastNotificationSlot?: string;
+  /** Preferred LLM for inbound WhatsApp progress parsing. */
+  progressAi?: {
+    provider: 'openai' | 'anthropic';
+    model: string;
+  };
 }
 export interface LocalCredential {
   accountId: Types.ObjectId;
@@ -71,6 +76,13 @@ export const accountSchema = new Schema<Account>(
       trim: true,
     },
     activeProjectId: { type: String, trim: true, index: true },
+    progressAi: {
+      provider: {
+        type: String,
+        enum: ['openai', 'anthropic'],
+      },
+      model: { type: String, trim: true },
+    },
     emailNotificationSchedule: {
       enabled: { type: Boolean, default: false },
       frequency: {
