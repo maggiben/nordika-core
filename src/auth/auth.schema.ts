@@ -24,6 +24,8 @@ export interface Account {
   progressAi?: {
     provider: 'openai' | 'anthropic';
     model: string;
+    openaiApiKey?: string;
+    anthropicApiKey?: string;
   };
 }
 export interface LocalCredential {
@@ -82,6 +84,8 @@ export const accountSchema = new Schema<Account>(
         enum: ['openai', 'anthropic'],
       },
       model: { type: String, trim: true },
+      openaiApiKey: { type: String, trim: true },
+      anthropicApiKey: { type: String, trim: true },
     },
     emailNotificationSchedule: {
       enabled: { type: Boolean, default: false },

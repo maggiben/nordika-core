@@ -230,7 +230,11 @@ describe('AccountService', () => {
     accounts.findById.mockResolvedValue({
       email: 'person@example.com',
       language: 'es',
-      progressAi: { provider: 'anthropic', model: 'claude-sonnet-4-5' },
+      progressAi: {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5',
+        anthropicApiKey: 'sk-ant-secret',
+      },
       emailNotificationSchedule: {
         enabled: false,
         frequency: 'weekly',
@@ -245,13 +249,21 @@ describe('AccountService', () => {
     expect(result.progressAi).toEqual({
       provider: 'anthropic',
       model: 'claude-sonnet-4-5',
+      openaiKeyConfigured: false,
+      anthropicKeyConfigured: true,
     });
+    expect(JSON.stringify(result)).not.toContain('sk-ant-secret');
   });
 
   it('updates progressAi settings', async () => {
     accounts.findById.mockResolvedValue({
       email: 'person@example.com',
       language: 'es',
+      progressAi: {
+        provider: 'openai',
+        model: 'gpt-4o-mini',
+        openaiApiKey: 'sk-keep',
+      },
       emailNotificationSchedule: {
         enabled: false,
         frequency: 'weekly',
@@ -264,28 +276,99 @@ describe('AccountService', () => {
     accounts.findByIdAndUpdate.mockResolvedValue({
       email: 'person@example.com',
       language: 'es',
-      progressAi: { provider: 'openai', model: 'gpt-4o' },
+      progressAi: {
+        provider: 'openai',
+        model: 'gpt-4o',
+        openaiApiKey: 'sk-keep',
+        anthropicApiKey: 'sk-ant-new',
+      },
     });
 
     const result = await service.updateSettings('507f1f77bcf86cd799439011', {
-      progressAi: { provider: 'openai', model: 'gpt-4o' },
+      progressAi: {
+        provider: 'openai',
+        model: 'gpt-4o',
+        anthropicApiKey: 'sk-ant-new',
+      },
     });
 
     expect(result.progressAi).toEqual({
       provider: 'openai',
       model: 'gpt-4o',
+      openaiKeyConfigured: true,
+      anthropicKeyConfigured: true,
     });
     const updateCall = accounts.findByIdAndUpdate.mock.calls[0] as
       | [
           unknown,
-          { $set?: { progressAi?: { provider: string; model: string } } },
+          {
+            $set?: {
+              progressAi?: {
+                provider: string;
+                model: string;
+                openaiApiKey?: string;
+                anthropicApiKey?: string;
+              };
+            };
+          },
           unknown?,
         ]
       | undefined;
     expect(updateCall?.[1].$set?.progressAi).toEqual({
       provider: 'openai',
       model: 'gpt-4o',
+      openaiApiKey: 'sk-keep',
+      anthropicApiKey: 'sk-ant-new',
     });
+  });
+
+  it('clears a stored API key when PATCH sends null', async () => {
+    accounts.findById.mockResolvedValue({
+      email: 'person@example.com',
+      language: 'es',
+      progressAi: {
+        provider: 'openai',
+        model: 'gpt-4o-mini',
+        openaiApiKey: 'sk-remove-me',
+      },
+      emailNotificationSchedule: null,
+    });
+    accounts.findByIdAndUpdate.mockResolvedValue({
+      email: 'person@example.com',
+      language: 'es',
+      progressAi: { provider: 'openai', model: 'gpt-4o-mini' },
+    });
+
+    const result = await service.updateSettings('507f1f77bcf86cd799439011', {
+      progressAi: {
+        provider: 'openai',
+        model: 'gpt-4o-mini',
+        openaiApiKey: null,
+      },
+    });
+
+    expect(result.progressAi).toEqual({
+      provider: 'openai',
+      model: 'gpt-4o-mini',
+      openaiKeyConfigured: false,
+      anthropicKeyConfigured: false,
+    });
+    const updateCall = accounts.findByIdAndUpdate.mock.calls[0] as
+      | [
+          unknown,
+          {
+            $set?: {
+              progressAi?: { openaiApiKey?: string };
+            };
+          },
+          unknown?,
+        ]
+      | undefined;
+    expect(updateCall?.[1].$set?.progressAi).toEqual({
+      provider: 'openai',
+      model: 'gpt-4o-mini',
+    });
+    expect(updateCall?.[1].$set?.progressAi).not.toHaveProperty('openaiApiKey');
   });
 
   it('rejects disallowed progressAi models for the provider', async () => {

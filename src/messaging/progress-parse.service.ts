@@ -47,30 +47,33 @@ No inventes duración ni roles si no se mencionan.`;
 @Injectable()
 export class ProgressParseService {
   private readonly logger = new Logger(ProgressParseService.name);
-  private readonly openAiClient: OpenAI | null;
-  private readonly openAiModel: string;
-  private readonly anthropicApiKey: string | null;
-  private readonly anthropicModel: string;
+  private readonly envOpenAiApiKey: string | null;
+  private readonly envOpenAiModel: string;
+  private readonly envAnthropicApiKey: string | null;
+  private readonly envAnthropicModel: string;
   private anthropicFetch: typeof fetch = fetch;
+  /** @internal test seam for OpenAI client construction */
+  private openAiFactory: (apiKey: string) => OpenAI = (apiKey) =>
+    new OpenAI({ apiKey });
 
   constructor() {
     const openAi = getOpenAIConfig();
-    if (!openAi) {
-      this.openAiClient = null;
-      this.openAiModel = 'gpt-4o-mini';
-    } else {
-      this.openAiClient = new OpenAI({ apiKey: openAi.apiKey });
-      this.openAiModel = openAi.progressModel;
-    }
+    this.envOpenAiApiKey = openAi?.apiKey ?? null;
+    this.envOpenAiModel = openAi?.progressModel ?? 'gpt-4o-mini';
 
     const anthropic = getAnthropicConfig();
-    this.anthropicApiKey = anthropic?.apiKey ?? null;
-    this.anthropicModel = anthropic?.progressModel ?? 'claude-sonnet-4-5';
+    this.envAnthropicApiKey = anthropic?.apiKey ?? null;
+    this.envAnthropicModel = anthropic?.progressModel ?? 'claude-sonnet-4-5';
   }
 
   /** @internal test seam */
   setAnthropicFetchForTests(impl: typeof fetch): void {
     this.anthropicFetch = impl;
+  }
+
+  /** @internal test seam */
+  setOpenAiFactoryForTests(factory: (apiKey: string) => OpenAI): void {
+    this.openAiFactory = factory;
   }
 
   async parseReply(
@@ -103,19 +106,37 @@ export class ProgressParseService {
     return contextParts.join('\n');
   }
 
+  private resolveOpenAiApiKey(input: ProgressParseInput): string | null {
+    const accountKey = input.progressAi?.openaiApiKey?.trim();
+    if (accountKey) {
+      return accountKey;
+    }
+    return this.envOpenAiApiKey;
+  }
+
+  private resolveAnthropicApiKey(input: ProgressParseInput): string | null {
+    const accountKey = input.progressAi?.anthropicApiKey?.trim();
+    if (accountKey) {
+      return accountKey;
+    }
+    return this.envAnthropicApiKey;
+  }
+
   private async parseWithOpenAI(
     input: ProgressParseInput,
     replyBody: string,
     modelOverride?: string,
   ): Promise<ParsedProgressResult | null> {
-    if (!this.openAiClient) {
+    const apiKey = this.resolveOpenAiApiKey(input);
+    if (!apiKey) {
       return null;
     }
 
-    const model = modelOverride || this.openAiModel;
+    const model = modelOverride || this.envOpenAiModel;
+    const client = this.openAiFactory(apiKey);
 
     try {
-      const completion = await this.openAiClient.chat.completions.create({
+      const completion = await client.chat.completions.create({
         model,
         temperature: 0,
         response_format: { type: 'json_object' },
@@ -152,14 +173,15 @@ export class ProgressParseService {
     replyBody: string,
     modelOverride?: string,
   ): Promise<ParsedProgressResult | null> {
-    if (!this.anthropicApiKey) {
+    const apiKey = this.resolveAnthropicApiKey(input);
+    if (!apiKey) {
       this.logger.warn(
-        'Anthropic progress parse skipped: ANTHROPIC_API_KEY is not configured',
+        'Anthropic progress parse skipped: no account anthropicApiKey and ANTHROPIC_API_KEY is not configured',
       );
       return null;
     }
 
-    const model = modelOverride || this.anthropicModel;
+    const model = modelOverride || this.envAnthropicModel;
 
     try {
       const response = await this.anthropicFetch(
@@ -168,7 +190,7 @@ export class ProgressParseService {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
-            'x-api-key': this.anthropicApiKey,
+            'x-api-key': apiKey,
             'anthropic-version': '2023-06-01',
           },
           body: JSON.stringify({

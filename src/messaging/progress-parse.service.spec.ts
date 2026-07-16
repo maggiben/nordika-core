@@ -349,4 +349,77 @@ describe('ProgressParseService', () => {
     );
     warn.mockRestore();
   });
+
+  it('prefers account OpenAI key over env', async () => {
+    mockedGetOpenAIConfig.mockReturnValue({
+      apiKey: 'sk-env',
+      progressModel: 'gpt-4o-mini',
+    });
+    createMock.mockResolvedValue({
+      model: 'gpt-4o-mini',
+      choices: [{ message: { content: JSON.stringify({ percent: 12 }) } }],
+    });
+    const service = new ProgressParseService();
+    await expect(
+      service.parseReply({
+        replyBody: '12%',
+        progressAi: {
+          provider: 'openai',
+          model: 'gpt-4o-mini',
+          openaiApiKey: 'sk-account',
+        },
+      }),
+    ).resolves.toEqual({ percent: 12, model: 'gpt-4o-mini' });
+    expect(OpenAIMock).toHaveBeenCalledWith({ apiKey: 'sk-account' });
+  });
+
+  it('prefers account Anthropic key over env', async () => {
+    mockedGetOpenAIConfig.mockReturnValue(null);
+    mockedGetAnthropicConfig.mockReturnValue({
+      apiKey: 'sk-ant-env',
+      progressModel: 'claude-sonnet-4-5',
+    });
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          model: 'claude-sonnet-4-5',
+          content: [{ type: 'text', text: '{"percent": 9}' }],
+        }),
+    });
+    const service = new ProgressParseService();
+    service.setAnthropicFetchForTests(fetchMock);
+    await expect(
+      service.parseReply({
+        replyBody: '9%',
+        progressAi: {
+          provider: 'anthropic',
+          model: 'claude-sonnet-4-5',
+          anthropicApiKey: 'sk-ant-account',
+        },
+      }),
+    ).resolves.toEqual({ percent: 9, model: 'claude-sonnet-4-5' });
+    const firstCall = fetchMock.mock.calls[0] as
+      [string, { headers?: Record<string, string> }] | undefined;
+    expect(firstCall?.[1]?.headers?.['x-api-key']).toBe('sk-ant-account');
+  });
+
+  it('falls back to env OpenAI key when account key is absent', async () => {
+    mockedGetOpenAIConfig.mockReturnValue({
+      apiKey: 'sk-env-only',
+      progressModel: 'gpt-4o-mini',
+    });
+    createMock.mockResolvedValue({
+      model: 'gpt-4o-mini',
+      choices: [{ message: { content: JSON.stringify({ percent: 5 }) } }],
+    });
+    const service = new ProgressParseService();
+    await expect(
+      service.parseReply({
+        replyBody: '5%',
+        progressAi: { provider: 'openai', model: 'gpt-4o-mini' },
+      }),
+    ).resolves.toEqual({ percent: 5, model: 'gpt-4o-mini' });
+    expect(OpenAIMock).toHaveBeenCalledWith({ apiKey: 'sk-env-only' });
+  });
 });

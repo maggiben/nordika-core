@@ -12,12 +12,14 @@ import {
   type AppLanguage,
 } from '../i18n/languages';
 import {
+  ProgressAiSettingsDto,
   UpdateAccountSettingsDto,
   UpdateEmailScheduleDto,
 } from './account.dto';
 import {
   isAllowedProgressAiModel,
   normalizeProgressAi,
+  toPublicProgressAi,
   type ProgressAiSettings,
 } from './progress-ai';
 import { computeNextSendDates, normalizeSchedule } from './schedule';
@@ -44,7 +46,7 @@ export class AccountService {
 
     const language = normalizeLanguage(account.language);
     const emailSchedule = normalizeSchedule(account.emailNotificationSchedule);
-    const progressAi = normalizeProgressAi(account.progressAi);
+    const progressAi = toPublicProgressAi(account.progressAi);
 
     return {
       email: account.email,
@@ -95,8 +97,7 @@ export class AccountService {
     }
 
     if ('progressAi' in dto && dto.progressAi !== undefined) {
-      const next = this.requireValidProgressAi(dto.progressAi);
-      set.progressAi = next;
+      set.progressAi = this.mergeProgressAi(account.progressAi, dto.progressAi);
     }
 
     const update: Record<string, unknown> = { $set: set };
@@ -114,7 +115,7 @@ export class AccountService {
       throw new NotFoundException('Account not found.');
     }
 
-    const progressAi = normalizeProgressAi(updated.progressAi);
+    const progressAi = toPublicProgressAi(updated.progressAi);
 
     return {
       email: updated.email,
@@ -132,16 +133,47 @@ export class AccountService {
     return this.updateSettings(accountId, dto);
   }
 
-  private requireValidProgressAi(value: {
-    provider: 'openai' | 'anthropic';
-    model: string;
-  }): ProgressAiSettings {
-    const model = value.model.trim();
-    if (!isAllowedProgressAiModel(value.provider, model)) {
+  private mergeProgressAi(
+    existing: Account['progressAi'],
+    dto: ProgressAiSettingsDto,
+  ): ProgressAiSettings {
+    const provider = dto.provider;
+    const model = dto.model.trim();
+    if (!isAllowedProgressAiModel(provider, model)) {
       throw new BadRequestException(
-        `Model "${model}" is not allowed for provider "${value.provider}".`,
+        `Model "${model}" is not allowed for provider "${provider}".`,
       );
     }
-    return { provider: value.provider, model };
+
+    const current = normalizeProgressAi(existing);
+    const next: ProgressAiSettings = { provider, model };
+
+    if ('openaiApiKey' in dto) {
+      if (dto.openaiApiKey === null) {
+        // cleared
+      } else if (
+        typeof dto.openaiApiKey === 'string' &&
+        dto.openaiApiKey.trim()
+      ) {
+        next.openaiApiKey = dto.openaiApiKey.trim();
+      }
+    } else if (current?.openaiApiKey) {
+      next.openaiApiKey = current.openaiApiKey;
+    }
+
+    if ('anthropicApiKey' in dto) {
+      if (dto.anthropicApiKey === null) {
+        // cleared
+      } else if (
+        typeof dto.anthropicApiKey === 'string' &&
+        dto.anthropicApiKey.trim()
+      ) {
+        next.anthropicApiKey = dto.anthropicApiKey.trim();
+      }
+    } else if (current?.anthropicApiKey) {
+      next.anthropicApiKey = current.anthropicApiKey;
+    }
+
+    return next;
   }
 }

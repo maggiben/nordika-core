@@ -30,6 +30,20 @@ export class ProgressAiSettingsDto {
   @IsString()
   @IsIn(ALLOWED_PROGRESS_AI_MODELS)
   model!: string;
+
+  /** Omit to leave unchanged; non-empty string to set; null to clear. */
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null && value !== undefined)
+  @IsString()
+  @Length(1, 512)
+  openaiApiKey?: string | null;
+
+  /** Omit to leave unchanged; non-empty string to set; null to clear. */
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null && value !== undefined)
+  @IsString()
+  @Length(1, 512)
+  anthropicApiKey?: string | null;
 }
 
 export class UpdateAccountSettingsDto {
