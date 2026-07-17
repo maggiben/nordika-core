@@ -1988,8 +1988,15 @@ describe('MessagingService', () => {
       'última',
     );
     expect(
+      summary.reports.find((r) => r.taskId === 'task-a')?.contactLabel,
+    ).toBe('Jefe');
+    expect(
       summary.reports.find((r) => r.contactId === String(operario._id))?.role,
     ).toBe('operario');
+    expect(
+      summary.reports.find((r) => r.contactId === String(operario._id))
+        ?.contactLabel,
+    ).toBe('Operario');
     expect(summary.updatedAt).toBe(newer.toISOString());
   });
 

@@ -101,6 +101,8 @@ const OBRA_PROGRESS_ROLES: ObraProgressRole[] = [
 
 export interface ObraProgressReport {
   contactId: string;
+  contactLabel: string | null;
+  contactPhone: string | null;
   role: ObraProgressRole;
   taskId: string | null;
   percent: number;
@@ -600,6 +602,8 @@ export class MessagingService {
 
       reports.push({
         contactId: String(row.contactId),
+        contactLabel: contact?.label?.trim() ? contact.label.trim() : null,
+        contactPhone: contact?.phone?.trim() ? contact.phone.trim() : null,
         role,
         taskId: row.taskId?.trim() ? row.taskId : null,
         percent: progress.percent,
