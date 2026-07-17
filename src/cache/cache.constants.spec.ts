@@ -2,6 +2,7 @@ import {
   CACHE_TTLS,
   httpCacheKey,
   MESSAGING_CACHE_PATHS,
+  SOURCES_CACHE_PATHS,
 } from './cache.constants';
 
 describe('cache.constants', () => {
@@ -30,5 +31,9 @@ describe('cache.constants', () => {
     expect(CACHE_TTLS.MESSAGING_LIST_MS).toBeGreaterThan(
       CACHE_TTLS.MESSAGING_DYNAMIC_MS,
     );
+  });
+
+  it('exposes sources list cache path', () => {
+    expect(SOURCES_CACHE_PATHS.list).toBe('/sources');
   });
 });

@@ -6,6 +6,8 @@ import {
 } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
 import type { Connection, Model } from 'mongoose';
+import { SOURCES_CACHE_PATHS } from '../cache/cache.constants';
+import { OptionalCacheService } from '../cache/optional-cache.service';
 import {
   projectIdFromSnapshotContent,
   projectNombreFromSnapshotContent,
@@ -46,6 +48,7 @@ export class SourcesService {
     @Optional()
     @InjectConnection()
     private readonly connection: Connection | undefined,
+    private readonly cache: OptionalCacheService,
   ) {}
 
   async create(filename: string, content: unknown): Promise<CreatedSource> {
@@ -56,6 +59,8 @@ export class SourcesService {
       content,
       ...(projectId ? { projectId } : {}),
     });
+
+    await this.cache.invalidatePaths([SOURCES_CACHE_PATHS.list]);
 
     return {
       id: source.id,
@@ -107,12 +112,19 @@ export class SourcesService {
     }
 
     const sourceModel = this.getSourceModel();
-    const result = await sourceModel.deleteMany({ projectId: trimmed }).exec();
+    // Match top-level projectId and legacy rows that only stamped meta.projectId.
+    const result = await sourceModel
+      .deleteMany({
+        $or: [{ projectId: trimmed }, { 'content.meta.projectId': trimmed }],
+      })
+      .exec();
     const deletedCount = result.deletedCount ?? 0;
 
     if (deletedCount < 1) {
       throw new NotFoundException('Project source not found.');
     }
+
+    await this.cache.invalidatePaths([SOURCES_CACHE_PATHS.list]);
 
     return { projectId: trimmed, deletedCount };
   }

@@ -1,8 +1,16 @@
 import { NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import type { Connection } from 'mongoose';
+import { OptionalCacheService } from '../cache/optional-cache.service';
 import { SourcesService } from './sources.service';
 
 describe('SourcesService', () => {
+  const invalidatePaths = jest.fn(() => Promise.resolve());
+  const cache = { invalidatePaths } as unknown as OptionalCacheService;
+
+  beforeEach(() => {
+    invalidatePaths.mockClear();
+  });
+
   it('stores the parsed JSON and returns source metadata', async () => {
     const createdAt = new Date('2026-01-01T00:00:00.000Z');
     const create = jest.fn().mockResolvedValue({
@@ -14,7 +22,7 @@ describe('SourcesService', () => {
     const sourceModel = { create };
     const model = jest.fn().mockReturnValue(sourceModel);
     const connection = { model, models: {} } as unknown as Connection;
-    const service = new SourcesService(connection);
+    const service = new SourcesService(connection, cache);
 
     await expect(
       service.create('source.json', {
@@ -32,6 +40,7 @@ describe('SourcesService', () => {
       filename: 'source.json',
       projectId: 'proj_1',
     });
+    expect(invalidatePaths).toHaveBeenCalledWith(['/sources']);
   });
 
   it('lists the newest source per projectId and skips missing ids', async () => {
@@ -84,7 +93,7 @@ describe('SourcesService', () => {
     const sourceModel = { find };
     const model = jest.fn().mockReturnValue(sourceModel);
     const connection = { model, models: {} } as unknown as Connection;
-    const service = new SourcesService(connection);
+    const service = new SourcesService(connection, cache);
 
     await expect(service.listLatestPerProject()).resolves.toEqual([
       {
@@ -115,13 +124,16 @@ describe('SourcesService', () => {
     const sourceModel = { deleteMany };
     const model = jest.fn().mockReturnValue(sourceModel);
     const connection = { model, models: {} } as unknown as Connection;
-    const service = new SourcesService(connection);
+    const service = new SourcesService(connection, cache);
 
     await expect(service.deleteByProjectId('proj_a')).resolves.toEqual({
       projectId: 'proj_a',
       deletedCount: 2,
     });
-    expect(deleteMany).toHaveBeenCalledWith({ projectId: 'proj_a' });
+    expect(deleteMany).toHaveBeenCalledWith({
+      $or: [{ projectId: 'proj_a' }, { 'content.meta.projectId': 'proj_a' }],
+    });
+    expect(invalidatePaths).toHaveBeenCalledWith(['/sources']);
   });
 
   it('rejects delete when no sources match the projectId', async () => {
@@ -131,15 +143,16 @@ describe('SourcesService', () => {
     const sourceModel = { deleteMany };
     const model = jest.fn().mockReturnValue(sourceModel);
     const connection = { model, models: {} } as unknown as Connection;
-    const service = new SourcesService(connection);
+    const service = new SourcesService(connection, cache);
 
     await expect(service.deleteByProjectId('missing')).rejects.toThrow(
       NotFoundException,
     );
+    expect(invalidatePaths).not.toHaveBeenCalled();
   });
 
   it('reports when MongoDB is unavailable', async () => {
-    const service = new SourcesService(undefined);
+    const service = new SourcesService(undefined, cache);
 
     await expect(service.create('source.json', {})).rejects.toThrow(
       ServiceUnavailableException,

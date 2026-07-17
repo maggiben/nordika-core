@@ -31,3 +31,8 @@ export const MESSAGING_CACHE_PATHS = {
       ? `/messaging/progress?projectId=${projectId}`
       : '/messaging/progress',
 } as const;
+
+/** HTTP GET paths cached for SourceOfTruth listing. */
+export const SOURCES_CACHE_PATHS = {
+  list: '/sources',
+} as const;
