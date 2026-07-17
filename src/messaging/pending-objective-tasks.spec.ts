@@ -1,4 +1,5 @@
 import {
+  effectiveObjectiveAvance,
   extractPendingObjectiveTasks,
   isPendingObjectiveAvance,
 } from './pending-objective-tasks';
@@ -9,6 +10,12 @@ describe('pending-objective-tasks', () => {
     expect(isPendingObjectiveAvance(40)).toBe(true);
     expect(isPendingObjectiveAvance(100)).toBe(false);
     expect(isPendingObjectiveAvance(101)).toBe(false);
+  });
+
+  it('prefers live percent over snapshot avance', () => {
+    expect(effectiveObjectiveAvance(40, 100)).toBe(100);
+    expect(effectiveObjectiveAvance(100, 40)).toBe(40);
+    expect(effectiveObjectiveAvance(40, undefined)).toBe(40);
   });
 
   it('extracts pending objective tasks and skips completed ones', () => {
@@ -26,6 +33,25 @@ describe('pending-objective-tasks', () => {
         avanceBase: 40,
       },
       { taskId: 'c', label: 'sin avance', avanceBase: null },
+    ]);
+  });
+
+  it('skips tasks already at 100% from live parsed progress', () => {
+    const pending = extractPendingObjectiveTasks(
+      {
+        tareas_con_objetivo: [
+          { id: 'a', label: 'colocacion carpinterias', avance_base: 40 },
+          { id: 'b', label: 'pintura', avance_base: 10 },
+        ],
+      },
+      20,
+      new Map([
+        ['a', 100],
+        ['b', 55],
+      ]),
+    );
+    expect(pending).toEqual([
+      { taskId: 'b', label: 'pintura', avanceBase: 55 },
     ]);
   });
 

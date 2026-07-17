@@ -2805,6 +2805,73 @@ describe('MessagingService', () => {
     expect(ask?.repliedAt).toBeUndefined();
   });
 
+  it('skips task checklist asks already at 100% from live parsed progress', async () => {
+    const lead = await contacts.create({
+      phone: '5491138911798',
+      label: 'Benjamin',
+      active: true,
+      tags: ['staff'],
+      projectId: ACTIVE_PROJECT,
+      catalogSlotKey: 'slot-live-100',
+      catalogSlotStartAt: new Date('2026-07-15T12:00:00.000Z'),
+    });
+    await sources.create({
+      filename: 'obra.json',
+      projectId: ACTIVE_PROJECT,
+      content: {
+        meta: { projectId: ACTIVE_PROJECT, projectNombre: 'Pier' },
+        tareas_con_objetivo: [
+          { id: 'carp', label: 'colocacion carpinterias', avance_base: 40 },
+          { id: 'pint', label: 'pintura', avance_base: 10 },
+        ],
+      },
+    });
+    await messages.create({
+      contactId: lead._id,
+      phone: lead.phone,
+      direction: 'outbound',
+      body: 'prev',
+      status: 'sent',
+      source: 'task_checklist',
+      taskId: 'carp',
+      taskLabel: 'colocacion carpinterias',
+      projectId: ACTIVE_PROJECT,
+      repliedAt: new Date('2026-07-14T12:00:00.000Z'),
+      parsedProgress: {
+        percent: 100,
+        parsedAt: new Date('2026-07-14T12:00:00.000Z'),
+      },
+    });
+
+    await (
+      service as unknown as {
+        sendNextTaskChecklistAsk: (
+          contact: (typeof contacts.store)[0],
+          slotKey: string,
+        ) => Promise<void>;
+      }
+    ).sendNextTaskChecklistAsk(lead, 'slot-live-100');
+
+    expect(sendInteractive).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        sendInteractive.mock.calls[0] as unknown as [
+          string,
+          { title?: string; text?: string },
+        ]
+      )[1].title,
+    ).toBe('Pier · Tarea 1/1 · pintura');
+    expect(
+      messages.store.filter(
+        (row) =>
+          row.source === 'task_checklist' &&
+          row.direction === 'outbound' &&
+          row.taskId === 'carp' &&
+          row.slotKey === 'slot-live-100',
+      ),
+    ).toHaveLength(0);
+  });
+
   it('skips task checklist when Evolution is off or no pending tasks exist', async () => {
     const lead = await contacts.create({
       phone: '5491138911797',

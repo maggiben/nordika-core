@@ -30,9 +30,10 @@ It does **not** yet read snapshot tasks for WhatsApp or persist obra check-ins. 
 - **Alt:** Active project id → deferred until multi-project Core wiring exists
 
 ### 2. Pending filter
-- **Choice:** `!(Number(avance_base) >= 100)`
-- **Why:** Matches dashboard mental model of incomplete objective tasks; includes null/undefined avance
+- **Choice:** Effective avance `!(Number(avance) >= 100)`, where effective avance prefers the latest live `parsedProgress.percent` for that `taskId` on the project when present, otherwise snapshot `avance_base`
+- **Why:** Matches dashboard mental model of incomplete objective tasks; includes null/undefined avance; avoids re-asking tasks already reported at 100% via WhatsApp when the snapshot was not re-uploaded
 - **Alt:** Filter by `fin` / dates → less reliable in current snapshots
+- **Alt rejected:** Snapshot-only filter → re-asks completed live tasks every slot until operators re-upload
 
 ### 3. Delivery = synthetic catalog-like sequence per slot
 - **Choice:** Build ordered task asks for the same `assignedContactId` used by catalog messages (first assigned catalog contact for the obra; if multiple contacts have assigned catalog items, each contact still only receives their own catalog; task checklist uses the contact that owns at least one assigned catalog message — if several, prefer the contact with the lowest phone/label sort as v1 default, **or** replicate asks to every contact that has catalog assignments).  

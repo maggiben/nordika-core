@@ -3029,6 +3029,33 @@ export class MessagingService {
     return latest?._id ? latest : null;
   }
 
+  private async loadLiveTaskPercentsForProject(
+    projectId: string,
+  ): Promise<Map<string, number>> {
+    const rows = await this.messages
+      .find({
+        projectId,
+        direction: 'outbound',
+        parsedProgress: { $exists: true },
+      })
+      .sort({ repliedAt: -1 })
+      .exec();
+
+    const byTaskId = new Map<string, number>();
+    for (const row of rows) {
+      const taskId = row.taskId?.trim();
+      if (!taskId || !row.parsedProgress || byTaskId.has(taskId)) {
+        continue;
+      }
+      const percent = row.parsedProgress.percent;
+      if (typeof percent !== 'number' || !Number.isFinite(percent)) {
+        continue;
+      }
+      byTaskId.set(taskId, percent);
+    }
+    return byTaskId;
+  }
+
   private async loadPendingObjectiveTasksForProject(
     projectId: string,
   ): Promise<{
@@ -3040,11 +3067,17 @@ export class MessagingService {
     if (!latest) {
       return null;
     }
+    const livePercentByTaskId =
+      await this.loadLiveTaskPercentsForProject(projectId);
     return {
       sourceId: latest._id,
       projectName:
         projectNombreFromSnapshotContent(latest.content) ?? projectId,
-      tasks: extractPendingObjectiveTasks(latest.content),
+      tasks: extractPendingObjectiveTasks(
+        latest.content,
+        undefined,
+        livePercentByTaskId,
+      ),
     };
   }
 

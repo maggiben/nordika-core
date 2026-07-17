@@ -30,12 +30,26 @@ export function isPendingObjectiveAvance(avanceBase: unknown): boolean {
 }
 
 /**
+ * Effective avance for WhatsApp pending checks: prefer live parsed percent
+ * when present so tasks already reported at 100% are not re-asked.
+ */
+export function effectiveObjectiveAvance(
+  snapshotAvanceBase: unknown,
+  livePercent: number | undefined,
+): unknown {
+  return livePercent !== undefined ? livePercent : snapshotAvanceBase;
+}
+
+/**
  * Extract pending `tareas_con_objetivo` from a Nodika snapshot payload.
  * Caps the list to avoid flooding WhatsApp.
+ * When `livePercentByTaskId` is provided, tasks with live percent >= 100 are
+ * excluded even if snapshot `avance_base` is still below 100.
  */
 export function extractPendingObjectiveTasks(
   content: unknown,
   cap = DEFAULT_CAP,
+  livePercentByTaskId?: ReadonlyMap<string, number>,
 ): PendingObjectiveTask[] {
   if (!isRecord(content)) {
     return [];
@@ -49,13 +63,20 @@ export function extractPendingObjectiveTasks(
   for (let index = 0; index < raw.length; index += 1) {
     const row: unknown = raw[index];
     const record = isRecord(row) ? row : {};
-    if (!isPendingObjectiveAvance(record.avance_base)) {
+    const taskId = asString(record.id) ?? `task-${index + 1}`;
+    const livePercent = livePercentByTaskId?.get(taskId);
+    if (
+      !isPendingObjectiveAvance(
+        effectiveObjectiveAvance(record.avance_base, livePercent),
+      )
+    ) {
       continue;
     }
     pending.push({
-      taskId: asString(record.id) ?? `task-${index + 1}`,
+      taskId,
       label: asString(record.label) ?? `Task ${index + 1}`,
-      avanceBase: asNumber(record.avance_base),
+      avanceBase:
+        livePercent !== undefined ? livePercent : asNumber(record.avance_base),
     });
     if (pending.length >= cap) {
       break;

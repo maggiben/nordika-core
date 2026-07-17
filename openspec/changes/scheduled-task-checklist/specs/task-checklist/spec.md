@@ -4,9 +4,11 @@
 
 On each claimed notification slot, the service SHALL load the latest
 `SourceOfTruth` document (by `createdAt` descending) and treat entries in
-`content.tareas_con_objetivo` as pending when `avance_base` is missing or
-strictly less than `100`. Completed tasks (`avance_base >= 100`) MUST NOT be
-asked again on that load.
+`content.tareas_con_objetivo` as pending when effective avance is missing or
+strictly less than `100`. Effective avance SHALL prefer the latest live
+`parsedProgress.percent` for that `taskId` on the project when present;
+otherwise it SHALL use snapshot `avance_base`. Completed tasks (effective
+avance `>= 100`) MUST NOT be asked again on that load.
 
 #### Scenario: Pending colocacion carpinterias
 
@@ -16,6 +18,14 @@ asked again on that load.
 - **WHEN** a notification slot is claimed
 - **THEN** the pending set includes `"colocacion carpinterias"`
 - **AND** excludes the completed task
+
+#### Scenario: Live progress at 100% skips re-ask
+
+- **GIVEN** the latest source has a task with `avance_base` `40`
+- **AND** the latest outbound for that `taskId` on the project has
+  `parsedProgress.percent` `100`
+- **WHEN** a notification slot is claimed
+- **THEN** the pending set excludes that task
 
 #### Scenario: No source uploaded
 
