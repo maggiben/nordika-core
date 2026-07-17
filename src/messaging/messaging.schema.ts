@@ -29,6 +29,16 @@ export interface InteractiveTemplateBody {
   widgets: TemplateWidget[];
 }
 
+export type StaffOrgReportRole = 'operario' | 'jornalero' | 'otro';
+
+export interface StaffOrgReport {
+  id: string;
+  name: string;
+  role: StaffOrgReportRole;
+  /** Free-text label when role is `otro`. */
+  roleOther?: string;
+}
+
 export interface WhatsAppContact {
   phone: string;
   label?: string;
@@ -44,6 +54,8 @@ export interface WhatsAppContact {
    * @deprecated Prefer `projectIds`. Kept for legacy documents / clients.
    */
   projectId?: string;
+  /** Direct reports under this jefe de obra (org chart). */
+  orgReports?: StaffOrgReport[];
   /** Active catalog notification slot; replies before this cycle are ignored. */
   catalogSlotKey?: string;
   catalogSlotStartAt?: Date;
@@ -183,6 +195,21 @@ export const whatsAppContactSchema = new Schema<WhatsAppContact>(
     tags: { type: [String], required: true, default: [] },
     projectIds: { type: [String], default: [], index: true },
     projectId: { type: String, trim: true, index: true },
+    orgReports: {
+      type: [
+        {
+          id: { type: String, required: true, trim: true },
+          name: { type: String, required: true, trim: true },
+          role: {
+            type: String,
+            required: true,
+            enum: ['operario', 'jornalero', 'otro'],
+          },
+          roleOther: { type: String, trim: true },
+        },
+      ],
+      default: [],
+    },
     catalogSlotKey: { type: String },
     catalogSlotStartAt: { type: Date },
   },

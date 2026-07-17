@@ -265,8 +265,14 @@ describe('MessagingService', () => {
     active: boolean;
     tags: string[];
     language?: string;
-    projectId?: string;
+    projectId?: string | null;
     projectIds?: string[];
+    orgReports?: Array<{
+      id: string;
+      name: string;
+      role: 'operario' | 'jornalero' | 'otro';
+      roleOther?: string;
+    }>;
     catalogSlotKey?: string;
     catalogSlotStartAt?: Date;
   }>();
@@ -911,6 +917,16 @@ describe('MessagingService', () => {
         sendInteractive.mock.calls[1] as unknown as [string, { title?: string }]
       )[1].title,
     ).toBe('2/2 · Asistencia del equipo');
+
+    // Stamp Wednesday outbounds before Thursday's slot start so the new
+    // cycle filter ($gte slotStart) does not treat them as in-slot sends.
+    // (sentAt defaults to "now", which breaks once wall-clock passes the fixture dates.)
+    const beforeThursdaySlot = new Date(thursday.getTime() - 60_000);
+    for (const row of messages.store) {
+      if (row.direction === 'outbound' && row.source === 'catalog') {
+        row.sentAt = beforeThursdaySlot;
+      }
+    }
 
     sendInteractive.mockClear();
     await service.runScheduledNotifications(thursday);
@@ -2993,6 +3009,61 @@ describe('MessagingService', () => {
       projectId: 'proj_b',
     });
     expect(normalizeContactProjectIds(updated)).toEqual(['proj_a', 'proj_b']);
+  });
+
+  it('replaces project membership when projectIds array is sent', async () => {
+    const contact = await contacts.create({
+      phone: '5491111111167',
+      label: 'Replace',
+      active: true,
+      tags: ['staff'],
+      projectIds: ['proj_a', 'proj_b'],
+      projectId: 'proj_a',
+    });
+    const updated = await service.updateContact(String(contact._id), {
+      projectIds: ['proj_c'],
+    });
+    expect(normalizeContactProjectIds(updated)).toEqual(['proj_c']);
+  });
+
+  it('clears project membership when projectIds is empty', async () => {
+    const contact = await contacts.create({
+      phone: '5491111111168',
+      label: 'Clear',
+      active: true,
+      tags: ['staff'],
+      projectIds: ['proj_a'],
+      projectId: 'proj_a',
+    });
+    const updated = await service.updateContact(String(contact._id), {
+      projectIds: [],
+    });
+    expect(normalizeContactProjectIds(updated)).toEqual([]);
+  });
+
+  it('persists orgReports and includes them on the roster', async () => {
+    const contact = await contacts.create({
+      phone: '5491111111169',
+      label: 'Org Lead',
+      active: true,
+      tags: ['staff'],
+      projectIds: ['proj_a'],
+      projectId: 'proj_a',
+    });
+    const updated = await service.updateContact(String(contact._id), {
+      orgReports: [
+        { id: 'r1', name: 'Ana', role: 'operario' },
+        { id: 'r2', name: 'Luis', role: 'jornalero' },
+      ],
+    });
+    expect(updated.orgReports).toEqual([
+      { id: 'r1', name: 'Ana', role: 'operario' },
+      { id: 'r2', name: 'Luis', role: 'jornalero' },
+    ]);
+    const roster = await service.listStaffRoster();
+    const row = roster.find((item) => item._id === String(contact._id));
+    expect(row?.orgReports).toHaveLength(2);
+    expect(row?.orgReports[0]?.name).toBe('Ana');
   });
 
   it('merges project membership when createContact hits an existing phone', async () => {

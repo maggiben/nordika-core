@@ -34,6 +34,24 @@ function toAppLanguage(value: unknown): unknown {
   return normalizeLanguage(value);
 }
 
+export class OrgReportDto {
+  @IsString()
+  @Length(1, 120)
+  id!: string;
+
+  @IsString()
+  @Length(1, 120)
+  name!: string;
+
+  @IsIn(['operario', 'jornalero', 'otro'])
+  role!: 'operario' | 'jornalero' | 'otro';
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 120)
+  roleOther?: string;
+}
+
 export class CreateContactDto {
   @Transform(({ value }) => toDigitPhone(value))
   @IsString()
@@ -68,12 +86,23 @@ export class CreateContactDto {
   @Length(1, 120)
   projectId?: string;
 
-  /** Merges these obras into membership. */
+  /**
+   * On create: merged into membership.
+   * On update (see UpdateContactDto): replaces membership when present.
+   */
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
   @ArrayMaxSize(40)
   projectIds?: string[];
+
+  /** Replaces the contact org chart when present. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @ValidateNested({ each: true })
+  @Type(() => OrgReportDto)
+  orgReports?: OrgReportDto[];
 }
 
 export class UpdateContactDto {
@@ -103,12 +132,20 @@ export class UpdateContactDto {
   @Length(1, 120)
   projectId?: string;
 
-  /** Merges these obras into membership. */
+  /** When present, replaces membership (empty array clears). */
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
   @ArrayMaxSize(40)
   projectIds?: string[];
+
+  /** When present, replaces the contact org chart. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @ValidateNested({ each: true })
+  @Type(() => OrgReportDto)
+  orgReports?: OrgReportDto[];
 }
 
 export class TemplateBodyDto {

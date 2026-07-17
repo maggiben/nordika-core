@@ -69,6 +69,7 @@ import {
   WORK_STATUS_MODEL,
   WhatsAppContactDocument,
   WorkStatusDocument,
+  type StaffOrgReport,
 } from './messaging.schema';
 import { extractPendingObjectiveTasks } from './pending-objective-tasks';
 import {
@@ -76,6 +77,7 @@ import {
   mergeContactProjectIds,
   normalizeContactProjectIds,
 } from './contact-project-ids';
+import { normalizeOrgReports } from './org-reports';
 import { ProgressParseService } from './progress-parse.service';
 import {
   computeResponseLatencyMs,
@@ -142,6 +144,7 @@ export interface StaffRosterRow {
   tags: string[];
   projectId?: string | null;
   projectIds?: string[];
+  orgReports: StaffOrgReport[];
   lastSentAt: string | null;
   lastReceivedAt: string | null;
   lastTemplateKey: string | null;
@@ -240,17 +243,31 @@ export class MessagingService {
         );
       }
       await this.deactivatePhoneVariantDuplicates(existing, phone);
+      const membershipPatch =
+        dto.projectId !== undefined || dto.projectIds !== undefined
+          ? {
+              projectIds: mergeContactProjectIds(
+                normalizeContactProjectIds(existing),
+                dto.projectIds,
+                dto.projectId,
+              ),
+            }
+          : {};
       return this.updateContact(String(existing._id), {
         ...(dto.label !== undefined ? { label: dto.label } : {}),
         ...(dto.language !== undefined ? { language: dto.language } : {}),
         ...(dto.active !== undefined ? { active: dto.active } : {}),
         ...(dto.tags !== undefined ? { tags: dto.tags } : {}),
-        ...(dto.projectId !== undefined ? { projectId: dto.projectId } : {}),
-        ...(dto.projectIds !== undefined ? { projectIds: dto.projectIds } : {}),
+        ...membershipPatch,
+        ...(dto.orgReports !== undefined ? { orgReports: dto.orgReports } : {}),
       });
     }
 
     const projectIds = mergeContactProjectIds(dto.projectIds, dto.projectId);
+    const orgReports =
+      dto.orgReports !== undefined
+        ? normalizeOrgReports(dto.orgReports)
+        : undefined;
     const contact = await this.contacts.create({
       phone,
       label: dto.label,
@@ -260,6 +277,7 @@ export class MessagingService {
       ...(projectIds.length > 0
         ? { projectIds, projectId: projectIds[0] }
         : {}),
+      ...(orgReports !== undefined ? { orgReports } : {}),
     });
     await this.cache.invalidatePaths([
       MESSAGING_CACHE_PATHS.contacts,
@@ -299,16 +317,22 @@ export class MessagingService {
     if (dto.tags !== undefined) {
       patch.tags = dto.tags;
     }
-    if (dto.projectId !== undefined || dto.projectIds !== undefined) {
+    if (dto.projectIds !== undefined) {
+      const projectIds = mergeContactProjectIds(dto.projectIds);
+      patch.projectIds = projectIds;
+      patch.projectId = projectIds[0] ?? null;
+    } else if (dto.projectId !== undefined) {
       const projectIds = mergeContactProjectIds(
         normalizeContactProjectIds(existing),
-        dto.projectIds,
         dto.projectId,
       );
       patch.projectIds = projectIds;
       if (projectIds.length > 0) {
         patch.projectId = projectIds[0];
       }
+    }
+    if (dto.orgReports !== undefined) {
+      patch.orgReports = normalizeOrgReports(dto.orgReports);
     }
 
     const contact = await this.contacts
@@ -784,6 +808,7 @@ export class MessagingService {
         tags: contact.tags ?? [],
         projectIds: normalizeContactProjectIds(contact),
         projectId: normalizeContactProjectIds(contact)[0] ?? null,
+        orgReports: normalizeOrgReports(contact.orgReports),
         lastSentAt: lastOutbound?.sentAt
           ? lastOutbound.sentAt.toISOString()
           : null,
