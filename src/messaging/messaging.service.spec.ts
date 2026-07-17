@@ -2928,6 +2928,97 @@ describe('MessagingService', () => {
     ).toHaveLength(0);
   });
 
+  it('keeps chat progress total after mid-slot 100% replies', async () => {
+    await accounts.create({
+      email: 'ops-progress@example.com',
+      activeProjectId: ACTIVE_PROJECT,
+    });
+    const lead = await contacts.create({
+      phone: '5491138911801',
+      label: 'Benjamin',
+      active: true,
+      tags: ['staff'],
+      projectId: ACTIVE_PROJECT,
+      catalogSlotKey: 'slot-honest-progress',
+      catalogSlotStartAt: new Date('2026-07-15T12:00:00.000Z'),
+    });
+    const labels = [
+      'ASCENSOR',
+      'pintura piso 8',
+      'pintura piso 9',
+      '1era mano 9no',
+      '2da mano y terminacion 8',
+    ];
+    await sources.create({
+      filename: 'obra.json',
+      projectId: ACTIVE_PROJECT,
+      content: {
+        meta: { projectId: ACTIVE_PROJECT, projectNombre: 'CROQUIS' },
+        tareas_con_objetivo: labels.map((label, index) => ({
+          id: `t${index + 1}`,
+          label,
+          avance_base: 10,
+          ini: '2020-01-01',
+          fin: '2099-12-31',
+        })),
+      },
+    });
+
+    const askNext = () =>
+      (
+        service as unknown as {
+          sendNextTaskChecklistAsk: (
+            contact: (typeof contacts.store)[0],
+            slotKey: string,
+          ) => Promise<void>;
+        }
+      ).sendNextTaskChecklistAsk(lead, 'slot-honest-progress');
+
+    await askNext();
+    expect(sendInteractive).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        sendInteractive.mock.calls[0] as unknown as [string, { title?: string }]
+      )[1].title,
+    ).toBe('CROQUIS · Tarea 1/5 · ASCENSOR');
+
+    parseReply.mockResolvedValue({ percent: 100 });
+    sendInteractive.mockClear();
+    await service.recordInboundMessage({
+      phone: lead.phone,
+      body: 'Al 100',
+    });
+    expect(sendInteractive).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        sendInteractive.mock.calls[0] as unknown as [string, { title?: string }]
+      )[1].title,
+    ).toBe('CROQUIS · Tarea 2/5 · pintura piso 8');
+
+    sendInteractive.mockClear();
+    await service.recordInboundMessage({
+      phone: lead.phone,
+      body: 'Al 100',
+    });
+    expect(
+      (
+        sendInteractive.mock.calls[0] as unknown as [string, { title?: string }]
+      )[1].title,
+    ).toBe('CROQUIS · Tarea 3/5 · pintura piso 9');
+
+    parseReply.mockResolvedValue({ percent: 50 });
+    sendInteractive.mockClear();
+    await service.recordInboundMessage({
+      phone: lead.phone,
+      body: 'Al 50',
+    });
+    expect(
+      (
+        sendInteractive.mock.calls[0] as unknown as [string, { title?: string }]
+      )[1].title,
+    ).toBe('CROQUIS · Tarea 4/5 · 1era mano 9no');
+  });
+
   it('skips task checklist when Evolution is off or no pending tasks exist', async () => {
     const lead = await contacts.create({
       phone: '5491138911797',

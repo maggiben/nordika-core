@@ -2890,8 +2890,11 @@ export class MessagingService {
       return;
     }
     const task = tasks[nextIndex];
-    const step = nextIndex + 1;
-    const total = tasks.length;
+    // Chat progress: answered asks + remaining unasked pending (stable across 100% replies).
+    const answered = doneIds.size;
+    const remaining = tasks.filter((row) => !doneIds.has(row.taskId)).length;
+    const step = answered + 1;
+    const total = answered + remaining;
     const labeledTitle = `${projectName} · Tarea ${step}/${total} · ${task.label}`;
     const body = `Obra ${projectName}: ¿Cómo va la tarea "${task.label}"? Contanos el avance actual.`;
     const askedAt = new Date();
