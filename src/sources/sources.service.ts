@@ -5,7 +5,10 @@ import {
 } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
 import type { Connection, Model } from 'mongoose';
-import { projectIdFromSnapshotContent } from './project-id';
+import {
+  projectIdFromSnapshotContent,
+  projectNombreFromSnapshotContent,
+} from './project-id';
 import { SOURCE_OF_TRUTH_MODEL, sourceOfTruthSchema } from './source.schema';
 import type { SourceOfTruth } from './source.schema';
 
@@ -15,6 +18,21 @@ export interface CreatedSource {
   createdAt: Date;
   projectId: string | null;
 }
+
+export interface ListedSource {
+  id: string;
+  projectId: string;
+  name: string;
+  filename: string;
+  createdAt: Date;
+  content: unknown;
+}
+
+type SourceDocument = SourceOfTruth & {
+  _id: { toString(): string; getTimestamp(): Date };
+  id?: string;
+  createdAt?: Date;
+};
 
 @Injectable()
 export class SourcesService {
@@ -41,6 +59,41 @@ export class SourcesService {
     };
   }
 
+  async listLatestPerProject(): Promise<ListedSource[]> {
+    const sourceModel = this.getSourceModel();
+    const rows = (await sourceModel
+      .find({
+        projectId: { $exists: true, $nin: [null, ''] },
+      })
+      .lean()
+      .exec()) as SourceDocument[];
+
+    const latestByProject = new Map<string, SourceDocument>();
+    for (const row of rows) {
+      const projectId = row.projectId?.trim();
+      if (!projectId) {
+        continue;
+      }
+      const existing = latestByProject.get(projectId);
+      if (!existing || sourceTimestamp(row) > sourceTimestamp(existing)) {
+        latestByProject.set(projectId, row);
+      }
+    }
+
+    return [...latestByProject.entries()]
+      .map(([projectId, row]) => ({
+        id: row.id ?? row._id.toString(),
+        projectId,
+        name: projectNombreFromSnapshotContent(row.content) ?? projectId,
+        filename: row.filename,
+        createdAt: row.createdAt ?? row._id.getTimestamp(),
+        content: row.content,
+      }))
+      .sort(
+        (left, right) => right.createdAt.getTime() - left.createdAt.getTime(),
+      );
+  }
+
   private getSourceModel(): Model<SourceOfTruth> {
     if (!this.connection) {
       throw new ServiceUnavailableException(
@@ -59,4 +112,8 @@ export class SourcesService {
       )
     );
   }
+}
+
+function sourceTimestamp(row: SourceDocument): number {
+  return row.createdAt?.getTime() ?? row._id.getTimestamp().getTime();
 }

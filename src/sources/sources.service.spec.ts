@@ -34,6 +34,80 @@ describe('SourcesService', () => {
     });
   });
 
+  it('lists the newest source per projectId and skips missing ids', async () => {
+    const find = jest.fn().mockReturnValue({
+      lean: () => ({
+        exec: () => [
+          {
+            _id: {
+              toString: () => 'old-a',
+              getTimestamp: () => new Date('2026-01-01T00:00:00.000Z'),
+            },
+            filename: 'a-old.json',
+            projectId: 'proj_a',
+            createdAt: new Date('2026-01-01T00:00:00.000Z'),
+            content: { meta: { projectId: 'proj_a', projectNombre: 'Alpha' } },
+          },
+          {
+            _id: {
+              toString: () => 'new-a',
+              getTimestamp: () => new Date('2026-02-01T00:00:00.000Z'),
+            },
+            filename: 'a-new.json',
+            projectId: 'proj_a',
+            createdAt: new Date('2026-02-01T00:00:00.000Z'),
+            content: {
+              meta: { projectId: 'proj_a', projectNombre: 'Alpha Next' },
+            },
+          },
+          {
+            _id: {
+              toString: () => 'only-b',
+              getTimestamp: () => new Date('2026-01-15T00:00:00.000Z'),
+            },
+            filename: 'b.json',
+            projectId: 'proj_b',
+            createdAt: new Date('2026-01-15T00:00:00.000Z'),
+            content: { meta: { projectId: 'proj_b', projectNombre: 'Beta' } },
+          },
+          {
+            _id: {
+              toString: () => 'no-project',
+              getTimestamp: () => new Date('2026-03-01T00:00:00.000Z'),
+            },
+            filename: 'orphan.json',
+            content: { meta: {} },
+          },
+        ],
+      }),
+    });
+    const sourceModel = { find };
+    const model = jest.fn().mockReturnValue(sourceModel);
+    const connection = { model, models: {} } as unknown as Connection;
+    const service = new SourcesService(connection);
+
+    await expect(service.listLatestPerProject()).resolves.toEqual([
+      {
+        id: 'new-a',
+        projectId: 'proj_a',
+        name: 'Alpha Next',
+        filename: 'a-new.json',
+        createdAt: new Date('2026-02-01T00:00:00.000Z'),
+        content: {
+          meta: { projectId: 'proj_a', projectNombre: 'Alpha Next' },
+        },
+      },
+      {
+        id: 'only-b',
+        projectId: 'proj_b',
+        name: 'Beta',
+        filename: 'b.json',
+        createdAt: new Date('2026-01-15T00:00:00.000Z'),
+        content: { meta: { projectId: 'proj_b', projectNombre: 'Beta' } },
+      },
+    ]);
+  });
+
   it('reports when MongoDB is unavailable', async () => {
     const service = new SourcesService(undefined);
 

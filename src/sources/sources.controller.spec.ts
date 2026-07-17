@@ -4,11 +4,32 @@ import { SourcesService } from './sources.service';
 
 describe('SourcesController', () => {
   const create = jest.fn();
-  const sourcesService = { create } as unknown as SourcesService;
+  const listLatestPerProject = jest.fn();
+  const sourcesService = {
+    create,
+    listLatestPerProject,
+  } as unknown as SourcesService;
   const controller = new SourcesController(sourcesService);
 
   beforeEach(() => {
     create.mockReset();
+    listLatestPerProject.mockReset();
+  });
+
+  it('lists latest sources per project', async () => {
+    const listed = [
+      {
+        id: 'source-id',
+        projectId: 'proj_a',
+        name: 'Alpha',
+        filename: 'a.json',
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        content: { meta: { projectId: 'proj_a' } },
+      },
+    ];
+    listLatestPerProject.mockResolvedValue(listed);
+
+    await expect(controller.list()).resolves.toEqual(listed);
   });
 
   it('parses an uploaded JSON file before saving it', async () => {
