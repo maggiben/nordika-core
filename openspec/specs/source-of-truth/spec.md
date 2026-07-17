@@ -75,3 +75,29 @@ received but MongoDB is not configured.
 - **AND** a client supplies a valid JSON upload
 - **WHEN** the client sends `POST /sources`
 - **THEN** the service responds with HTTP 503
+
+### Requirement: Delete sources by project id
+
+The service SHALL expose `DELETE /sources/:projectId` for callers with a valid
+Bearer JWT that includes the `source_writer` role. The service MUST hard-delete
+every SourceOfTruth document whose `projectId` matches the path parameter. When
+at least one document is deleted, the service responds with HTTP 200 containing
+`projectId` and `deletedCount`. When no documents match, the service responds
+with HTTP 404.
+
+#### Scenario: Authorized project delete
+
+- **GIVEN** MongoDB has one or more SourceOfTruth documents with `projectId`
+  `proj_a`
+- **AND** the client presents a valid JWT with the `source_writer` role
+- **WHEN** the client sends `DELETE /sources/proj_a`
+- **THEN** the service deletes those documents
+- **AND** responds with HTTP 200 containing `projectId` `proj_a` and a
+  `deletedCount` greater than zero
+
+#### Scenario: Project not found
+
+- **GIVEN** no SourceOfTruth documents match `projectId` `missing`
+- **AND** the client presents a valid JWT with the `source_writer` role
+- **WHEN** the client sends `DELETE /sources/missing`
+- **THEN** the service responds with HTTP 404

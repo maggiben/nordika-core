@@ -5,15 +5,18 @@ import { SourcesService } from './sources.service';
 describe('SourcesController', () => {
   const create = jest.fn();
   const listLatestPerProject = jest.fn();
+  const deleteByProjectId = jest.fn();
   const sourcesService = {
     create,
     listLatestPerProject,
+    deleteByProjectId,
   } as unknown as SourcesService;
   const controller = new SourcesController(sourcesService);
 
   beforeEach(() => {
     create.mockReset();
     listLatestPerProject.mockReset();
+    deleteByProjectId.mockReset();
   });
 
   it('lists latest sources per project', async () => {
@@ -74,6 +77,19 @@ describe('SourcesController', () => {
     await expect(controller.upload(jsonFile('{'))).rejects.toThrow(
       BadRequestException,
     );
+  });
+
+  it('deletes sources for a project id', async () => {
+    deleteByProjectId.mockResolvedValue({
+      projectId: 'proj_a',
+      deletedCount: 2,
+    });
+
+    await expect(controller.deleteByProjectId('proj_a')).resolves.toEqual({
+      projectId: 'proj_a',
+      deletedCount: 2,
+    });
+    expect(deleteByProjectId).toHaveBeenCalledWith('proj_a');
   });
 
   function jsonFile(content: string) {

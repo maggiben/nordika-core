@@ -1,5 +1,6 @@
 import {
   Injectable,
+  NotFoundException,
   Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -26,6 +27,11 @@ export interface ListedSource {
   filename: string;
   createdAt: Date;
   content: unknown;
+}
+
+export interface DeletedProjectSources {
+  projectId: string;
+  deletedCount: number;
 }
 
 type SourceDocument = SourceOfTruth & {
@@ -92,6 +98,23 @@ export class SourcesService {
       .sort(
         (left, right) => right.createdAt.getTime() - left.createdAt.getTime(),
       );
+  }
+
+  async deleteByProjectId(projectId: string): Promise<DeletedProjectSources> {
+    const trimmed = projectId.trim();
+    if (!trimmed) {
+      throw new NotFoundException('Project source not found.');
+    }
+
+    const sourceModel = this.getSourceModel();
+    const result = await sourceModel.deleteMany({ projectId: trimmed }).exec();
+    const deletedCount = result.deletedCount ?? 0;
+
+    if (deletedCount < 1) {
+      throw new NotFoundException('Project source not found.');
+    }
+
+    return { projectId: trimmed, deletedCount };
   }
 
   private getSourceModel(): Model<SourceOfTruth> {

@@ -1,4 +1,4 @@
-import { ServiceUnavailableException } from '@nestjs/common';
+import { NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import type { Connection } from 'mongoose';
 import { SourcesService } from './sources.service';
 
@@ -106,6 +106,36 @@ describe('SourcesService', () => {
         content: { meta: { projectId: 'proj_b', projectNombre: 'Beta' } },
       },
     ]);
+  });
+
+  it('deletes all sources for a projectId', async () => {
+    const deleteMany = jest.fn().mockReturnValue({
+      exec: () => Promise.resolve({ deletedCount: 2 }),
+    });
+    const sourceModel = { deleteMany };
+    const model = jest.fn().mockReturnValue(sourceModel);
+    const connection = { model, models: {} } as unknown as Connection;
+    const service = new SourcesService(connection);
+
+    await expect(service.deleteByProjectId('proj_a')).resolves.toEqual({
+      projectId: 'proj_a',
+      deletedCount: 2,
+    });
+    expect(deleteMany).toHaveBeenCalledWith({ projectId: 'proj_a' });
+  });
+
+  it('rejects delete when no sources match the projectId', async () => {
+    const deleteMany = jest.fn().mockReturnValue({
+      exec: () => Promise.resolve({ deletedCount: 0 }),
+    });
+    const sourceModel = { deleteMany };
+    const model = jest.fn().mockReturnValue(sourceModel);
+    const connection = { model, models: {} } as unknown as Connection;
+    const service = new SourcesService(connection);
+
+    await expect(service.deleteByProjectId('missing')).rejects.toThrow(
+      NotFoundException,
+    );
   });
 
   it('reports when MongoDB is unavailable', async () => {
