@@ -2291,6 +2291,36 @@ describe('MessagingService', () => {
       }),
     ).rejects.toBeInstanceOf(NotFoundException);
 
+    const freeText = await service.sendTestMessage({
+      phone: '5491112345678',
+      text: 'Hola Ana, ¿cómo fue la performance del equipo?',
+    });
+    expect(freeText.ok).toBe(true);
+    expect(freeText.templateKey).toBeNull();
+    expect(freeText.renderedText).toContain('performance');
+
+    await expect(
+      service.sendTestMessage({
+        phone: '5491112345678',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    sendInteractive.mockRejectedValueOnce(new Error('free text failed'));
+    await expect(
+      service.sendTestMessage({
+        phone: '5491112345678',
+        text: 'Otro mensaje libre',
+      }),
+    ).rejects.toThrow('free text failed');
+    expect(
+      messages.store.some(
+        (item) =>
+          item.source === 'test' &&
+          item.status === 'failed' &&
+          item.body === 'Otro mensaje libre',
+      ),
+    ).toBe(true);
+
     await expect(
       service.sendCatalogMessage(new Types.ObjectId().toHexString(), {}),
     ).rejects.toBeInstanceOf(NotFoundException);

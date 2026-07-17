@@ -668,7 +668,7 @@ export class MessagingService {
   async sendTestMessage(dto: TestSendDto): Promise<{
     ok: true;
     phone: string;
-    templateKey: string;
+    templateKey: string | null;
     renderedText: string;
     providerMessageId?: string;
   }> {
@@ -683,9 +683,25 @@ export class MessagingService {
       dto.language,
       getWhatsAppDefaultLanguage(),
     );
-    const body = await this.resolveTemplateBody(dto.templateKey, language);
+    const freeText = dto.text?.trim();
+    if (freeText) {
+      return this.sendFreeTextTestMessage({
+        phone,
+        text: freeText,
+        language,
+      });
+    }
+
+    const templateKey = dto.templateKey?.trim();
+    if (!templateKey) {
+      throw new BadRequestException(
+        'Provide either text or templateKey for test-send.',
+      );
+    }
+
+    const body = await this.resolveTemplateBody(templateKey, language);
     if (!body) {
-      throw new NotFoundException(`Template ${dto.templateKey} was not found.`);
+      throw new NotFoundException(`Template ${templateKey} was not found.`);
     }
 
     const variables = {
@@ -723,7 +739,7 @@ export class MessagingService {
           contactId: contact._id,
           phone,
           direction: 'outbound',
-          templateKey: dto.templateKey,
+          templateKey,
           body: renderedText,
           status: 'sent',
           providerMessageId: result.providerMessageId,
@@ -737,7 +753,7 @@ export class MessagingService {
       return {
         ok: true,
         phone,
-        templateKey: dto.templateKey,
+        templateKey,
         renderedText,
         providerMessageId: result.providerMessageId,
       };
@@ -749,8 +765,78 @@ export class MessagingService {
           contactId: contact._id,
           phone,
           direction: 'outbound',
-          templateKey: dto.templateKey,
+          templateKey,
           body: renderedText,
+          status: 'failed',
+          error: message,
+          sentAt: new Date(),
+          source: 'test',
+          responseStatus: 'neutral',
+        });
+      }
+      throw error;
+    }
+  }
+
+  private async sendFreeTextTestMessage(input: {
+    phone: string;
+    text: string;
+    language: string;
+  }): Promise<{
+    ok: true;
+    phone: string;
+    templateKey: null;
+    renderedText: string;
+    providerMessageId?: string;
+  }> {
+    const { phone, text, language } = input;
+    const renderedBody: InteractiveTemplateBody = {
+      text,
+      widgets: [],
+    };
+    const contact = await this.contacts.findOne({ phone }).exec();
+
+    try {
+      const result = await this.evolution.sendInteractive(
+        phone,
+        renderedBody,
+        text,
+        language,
+      );
+
+      if (contact) {
+        await this.recordStaffMessage({
+          contactId: contact._id,
+          phone,
+          direction: 'outbound',
+          title: 'Performance check-in',
+          body: text,
+          status: 'sent',
+          providerMessageId: result.providerMessageId,
+          sentAt: new Date(),
+          receivedAt: new Date(),
+          responseStatus: 'pending',
+          source: 'test',
+        });
+      }
+
+      return {
+        ok: true,
+        phone,
+        templateKey: null,
+        renderedText: text,
+        providerMessageId: result.providerMessageId,
+      };
+    } catch (error) {
+      if (contact) {
+        const message =
+          error instanceof Error ? error.message : 'Unknown send error';
+        await this.recordStaffMessage({
+          contactId: contact._id,
+          phone,
+          direction: 'outbound',
+          title: 'Performance check-in',
+          body: text,
           status: 'failed',
           error: message,
           sentAt: new Date(),

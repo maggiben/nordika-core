@@ -12,6 +12,7 @@ import {
   Matches,
   Max,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
@@ -396,9 +397,16 @@ export class TestSendDto {
   })
   phone!: string;
 
+  /** Free-text body; when set, templateKey is ignored. */
+  @ValidateIf((dto: TestSendDto) => !dto.templateKey?.trim())
+  @IsString()
+  @Length(1, 8000)
+  text?: string;
+
+  @ValidateIf((dto: TestSendDto) => !dto.text?.trim())
   @IsString()
   @Length(1, 64)
-  templateKey!: string;
+  templateKey?: string;
 
   @IsOptional()
   @Transform(({ value }) => toAppLanguage(value))

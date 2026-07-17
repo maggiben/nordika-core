@@ -198,7 +198,7 @@ export class MessagingController {
   testSend(@Body() dto: TestSendDto): Promise<{
     ok: true;
     phone: string;
-    templateKey: string;
+    templateKey: string | null;
     renderedText: string;
     providerMessageId?: string;
   }> {
