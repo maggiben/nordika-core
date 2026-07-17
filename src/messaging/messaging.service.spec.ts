@@ -1992,7 +1992,9 @@ describe('MessagingService', () => {
     const summary = await service.listObraProgress('obra-1');
     expect(summary.projectId).toBe('obra-1');
     expect(summary.reports).toHaveLength(2);
-    expect(summary.overallPercent).toBe(60);
+    // Only the task-scoped report (70%) counts toward overall; the catalog-style
+    // 50% row without taskId must not drag or inflate the aggregate.
+    expect(summary.overallPercent).toBe(70);
     expect(summary.byRole).toEqual({
       jefe_obra: 70,
       operario: 60,

@@ -672,10 +672,13 @@ export class MessagingService {
 
     reports.sort((a, b) => b.repliedAt.localeCompare(a.repliedAt));
 
+    // Overall % must reflect task-scoped asks only. Catalog/obra replies without
+    // taskId used to pull the aggregate to 100% while every task row stayed at 0%.
+    const taskPercents = reports
+      .filter((report) => report.taskId)
+      .map((report) => report.percent);
     const overallPercent =
-      reports.length === 0
-        ? null
-        : average(reports.map((report) => report.percent));
+      taskPercents.length === 0 ? null : average(taskPercents);
 
     return {
       projectId: trimmed,
