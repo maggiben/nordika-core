@@ -336,6 +336,13 @@ export class CreateCatalogMessageDto {
   @IsOptional()
   @IsBoolean()
   active?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  @Length(1, 40, { each: true })
+  tags?: string[];
 }
 
 export class UpdateCatalogMessageDto {
@@ -357,6 +364,13 @@ export class UpdateCatalogMessageDto {
   @IsOptional()
   @IsBoolean()
   active?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  @Length(1, 40, { each: true })
+  tags?: string[];
 }
 
 export class AssignCatalogMessageDto {

@@ -2483,9 +2483,23 @@ describe('MessagingService', () => {
             id: 'carp',
             label: 'colocacion carpinterias',
             avance_base: 40,
+            ini: '2020-01-01',
+            fin: '2099-12-31',
           },
-          { id: 'done', label: 'ya terminada', avance_base: 100 },
-          { id: 'pint', label: 'pintura', avance_base: 10 },
+          {
+            id: 'done',
+            label: 'ya terminada',
+            avance_base: 100,
+            ini: '2020-01-01',
+            fin: '2099-12-31',
+          },
+          {
+            id: 'pint',
+            label: 'pintura',
+            avance_base: 10,
+            ini: '2020-01-01',
+            fin: '2099-12-31',
+          },
         ],
       },
     });
@@ -2579,7 +2593,13 @@ describe('MessagingService', () => {
       projectId: ACTIVE_PROJECT,
       content: {
         tareas_con_objetivo: [
-          { id: 'carp', label: 'colocacion carpinterias', avance_base: 20 },
+          {
+            id: 'carp',
+            label: 'colocacion carpinterias',
+            avance_base: 20,
+            ini: '2020-01-01',
+            fin: '2099-12-31',
+          },
         ],
       },
     });
@@ -2677,7 +2697,13 @@ describe('MessagingService', () => {
       content: {
         meta: { projectId: ACTIVE_PROJECT, projectNombre: 'Pier' },
         tareas_con_objetivo: [
-          { id: 'carp', label: 'colocacion carpinterias', avance_base: 40 },
+          {
+            id: 'carp',
+            label: 'colocacion carpinterias',
+            avance_base: 40,
+            ini: '2020-01-01',
+            fin: '2099-12-31',
+          },
         ],
       },
     });
@@ -2725,7 +2751,13 @@ describe('MessagingService', () => {
       content: {
         meta: { projectId: ACTIVE_PROJECT, projectNombre: 'Pier' },
         tareas_con_objetivo: [
-          { id: 'carp', label: 'colocacion carpinterias', avance_base: 20 },
+          {
+            id: 'carp',
+            label: 'colocacion carpinterias',
+            avance_base: 20,
+            ini: '2020-01-01',
+            fin: '2099-12-31',
+          },
         ],
       },
     });
@@ -2778,8 +2810,20 @@ describe('MessagingService', () => {
       projectId: ACTIVE_PROJECT,
       content: {
         tareas_con_objetivo: [
-          { id: 'carp', label: 'colocacion carpinterias', avance_base: 20 },
-          { id: 'pint', label: 'pintura', avance_base: 10 },
+          {
+            id: 'carp',
+            label: 'colocacion carpinterias',
+            avance_base: 20,
+            ini: '2020-01-01',
+            fin: '2099-12-31',
+          },
+          {
+            id: 'pint',
+            label: 'pintura',
+            avance_base: 10,
+            ini: '2020-01-01',
+            fin: '2099-12-31',
+          },
         ],
       },
     });
@@ -2821,8 +2865,20 @@ describe('MessagingService', () => {
       content: {
         meta: { projectId: ACTIVE_PROJECT, projectNombre: 'Pier' },
         tareas_con_objetivo: [
-          { id: 'carp', label: 'colocacion carpinterias', avance_base: 40 },
-          { id: 'pint', label: 'pintura', avance_base: 10 },
+          {
+            id: 'carp',
+            label: 'colocacion carpinterias',
+            avance_base: 40,
+            ini: '2020-01-01',
+            fin: '2099-12-31',
+          },
+          {
+            id: 'pint',
+            label: 'pintura',
+            avance_base: 10,
+            ini: '2020-01-01',
+            fin: '2099-12-31',
+          },
         ],
       },
     });
@@ -2921,7 +2977,15 @@ describe('MessagingService', () => {
     await sources.create({
       filename: 'empty.json',
       content: {
-        tareas_con_objetivo: [{ id: 'x', label: 'done', avance_base: 100 }],
+        tareas_con_objetivo: [
+          {
+            id: 'x',
+            label: 'done',
+            avance_base: 100,
+            ini: '2020-01-01',
+            fin: '2099-12-31',
+          },
+        ],
       },
     });
     await (
@@ -2953,7 +3017,13 @@ describe('MessagingService', () => {
       projectId: 'proj_other',
       content: {
         tareas_con_objetivo: [
-          { id: 'wrong', label: 'otra obra', avance_base: 0 },
+          {
+            id: 'wrong',
+            label: 'otra obra',
+            avance_base: 0,
+            ini: '2020-01-01',
+            fin: '2099-12-31',
+          },
         ],
       },
     });
@@ -2962,7 +3032,13 @@ describe('MessagingService', () => {
       projectId: ACTIVE_PROJECT,
       content: {
         tareas_con_objetivo: [
-          { id: 'right', label: 'obra activa', avance_base: 5 },
+          {
+            id: 'right',
+            label: 'obra activa',
+            avance_base: 5,
+            ini: '2020-01-01',
+            fin: '2099-12-31',
+          },
         ],
       },
     });
@@ -3197,7 +3273,13 @@ describe('MessagingService', () => {
       projectId: ACTIVE_PROJECT,
       content: {
         tareas_con_objetivo: [
-          { id: 'carp', label: 'colocacion carpinterias', avance_base: 20 },
+          {
+            id: 'carp',
+            label: 'colocacion carpinterias',
+            avance_base: 20,
+            ini: '2020-01-01',
+            fin: '2099-12-31',
+          },
         ],
       },
     });
@@ -3214,5 +3296,213 @@ describe('MessagingService', () => {
       (row) => row.source === 'task_checklist' && row.status === 'failed',
     );
     expect(failed?.taskId).toBe('carp');
+  });
+
+  it('skips out-of-window tasks, excludes adelanto from catalog sequence, then sends adelanto last', async () => {
+    await accounts.create({
+      email: 'adelanto@example.com',
+      activeProjectId: ACTIVE_PROJECT,
+      emailNotificationSchedule: {
+        enabled: true,
+        frequency: 'weekly',
+        daysOfWeek: [3],
+        dayOfMonth: 1,
+        sendTime: '09:00',
+        timezone: 'America/Argentina/Buenos_Aires',
+      },
+    });
+    const lead = await contacts.create({
+      phone: '5491138911801',
+      label: 'Benjamin',
+      active: true,
+      tags: ['staff'],
+      projectId: ACTIVE_PROJECT,
+      catalogSlotKey: '2026-07-15T09:00|America/Argentina/Buenos_Aires|weekly',
+      catalogSlotStartAt: new Date('2026-07-15T12:00:00.000Z'),
+    });
+    const performance = await service.createCatalogMessage({
+      title: 'Performance del equipo',
+      body: 'Performance',
+      assignedContactId: String(lead._id),
+    });
+    await service.createCatalogMessage({
+      title: 'Adelanto de obra',
+      body: '¿Estuvieron trabajando en alguna otra tarea? ¿Cuál? ¿Cuánto se adelantó?',
+      assignedContactId: String(lead._id),
+      tags: ['adelanto'],
+    });
+    await sources.create({
+      filename: 'obra.json',
+      projectId: ACTIVE_PROJECT,
+      content: {
+        meta: { projectId: ACTIVE_PROJECT, projectNombre: 'Pier' },
+        tareas_con_objetivo: [
+          {
+            id: 'now',
+            label: 'en ventana',
+            avance_base: 10,
+            ini: '2020-01-01',
+            fin: '2099-12-31',
+          },
+          {
+            id: 'future',
+            label: 'agosto',
+            avance_base: 0,
+            ini: '2090-08-01',
+            fin: '2090-08-31',
+          },
+          {
+            id: 'past',
+            label: 'junio',
+            avance_base: 0,
+            ini: '2000-06-01',
+            fin: '2000-06-30',
+          },
+        ],
+      },
+    });
+
+    await service.sendCatalogMessage(String(performance._id));
+    expect(
+      (
+        sendInteractive.mock.calls[0] as unknown as [string, { title?: string }]
+      )[1].title,
+    ).toContain('Performance');
+    backdateCatalogOutbound(messages.store, performance._id);
+    sendInteractive.mockClear();
+
+    await service.recordInboundMessage({
+      phone: lead.phone,
+      body: 'performance ok',
+    });
+    expect(sendInteractive).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        sendInteractive.mock.calls[0] as unknown as [string, { title?: string }]
+      )[1].title,
+    ).toBe('Pier · Tarea 1/1 · en ventana');
+
+    sendInteractive.mockClear();
+    await service.recordInboundMessage({
+      phone: lead.phone,
+      body: 'ventana al 50%',
+    });
+    expect(sendInteractive).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        sendInteractive.mock.calls[0] as unknown as [
+          string,
+          { title?: string; text?: string },
+        ]
+      )[1].title,
+    ).toBe('Pier · Adelanto de obra');
+    expect(
+      (
+        sendInteractive.mock.calls[0] as unknown as [
+          string,
+          { title?: string; text?: string },
+        ]
+      )[1].text,
+    ).toContain('alguna otra tarea');
+    const adelantoOutbound = messages.store.find(
+      (row) => row.source === 'obra_adelanto' && row.direction === 'outbound',
+    );
+    expect(adelantoOutbound?.status).toBe('sent');
+
+    sendInteractive.mockClear();
+    await service.recordInboundMessage({
+      phone: lead.phone,
+      body: 'Arrancamos carpintería de agosto al 20%',
+    });
+    expect(sendInteractive).not.toHaveBeenCalled();
+    expect(adelantoOutbound?.replyBody).toContain('carpintería');
+  });
+
+  it('sends adelanto when there are no in-window tasks and records failures', async () => {
+    await accounts.create({
+      email: 'adelanto-empty@example.com',
+      activeProjectId: ACTIVE_PROJECT,
+    });
+    const lead = await contacts.create({
+      phone: '5491138911802',
+      label: 'Benjamin',
+      active: true,
+      tags: ['staff'],
+      projectId: ACTIVE_PROJECT,
+      catalogSlotKey: 'slot-adelanto-empty',
+      catalogSlotStartAt: new Date('2026-07-15T12:00:00.000Z'),
+    });
+    await service.createCatalogMessage({
+      title: 'Adelanto de obra',
+      body: '¿Hubo adelantos?',
+      assignedContactId: String(lead._id),
+      tags: ['adelanto'],
+    });
+    await sources.create({
+      filename: 'obra.json',
+      projectId: ACTIVE_PROJECT,
+      content: {
+        meta: { projectId: ACTIVE_PROJECT, projectNombre: 'Pier' },
+        tareas_con_objetivo: [
+          {
+            id: 'future',
+            label: 'agosto',
+            avance_base: 0,
+            ini: '2090-08-01',
+            fin: '2090-08-31',
+          },
+        ],
+      },
+    });
+
+    await (
+      service as unknown as {
+        sendNextTaskChecklistAsk: (
+          contact: (typeof contacts.store)[0],
+          slotKey: string,
+        ) => Promise<void>;
+      }
+    ).sendNextTaskChecklistAsk(lead, 'slot-adelanto-empty');
+    expect(
+      messages.store.filter(
+        (row) =>
+          row.source === 'obra_adelanto' &&
+          row.direction === 'outbound' &&
+          row.status === 'sent',
+      ),
+    ).toHaveLength(1);
+
+    sendInteractive.mockRejectedValueOnce(new Error('evolution down'));
+    const lead2 = await contacts.create({
+      phone: '5491138911803',
+      label: 'Other',
+      active: true,
+      tags: ['staff'],
+      projectId: ACTIVE_PROJECT,
+      catalogSlotKey: 'slot-adelanto-fail',
+      catalogSlotStartAt: new Date('2026-07-15T12:00:00.000Z'),
+    });
+    await service.createCatalogMessage({
+      title: 'Adelanto de obra',
+      body: '¿Hubo adelantos?',
+      assignedContactId: String(lead2._id),
+      tags: ['adelanto'],
+    });
+    await (
+      service as unknown as {
+        sendNextTaskChecklistAsk: (
+          contact: (typeof contacts.store)[0],
+          slotKey: string,
+        ) => Promise<void>;
+      }
+    ).sendNextTaskChecklistAsk(lead2, 'slot-adelanto-fail');
+    expect(
+      messages.store.find(
+        (row) =>
+          row.source === 'obra_adelanto' &&
+          row.phone === lead2.phone &&
+          row.status === 'failed',
+      )?.error,
+    ).toContain('evolution down');
   });
 });

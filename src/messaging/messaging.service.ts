@@ -10,6 +10,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Resend } from 'resend';
 import {
+  calendarDateInTimeZone,
   isScheduleDueAt,
   normalizeSchedule,
   notificationSlotKey,
@@ -58,6 +59,7 @@ import {
   MessageDispatchDocument,
   MessageTemplate,
   MessageTemplateDocument,
+  ADELANTO_CATALOG_TAG,
   STAFF_CATALOG_MESSAGE_MODEL,
   STAFF_MESSAGE_MODEL,
   StaffCatalogMessageDocument,
@@ -72,6 +74,32 @@ import {
   type StaffOrgReport,
 } from './messaging.schema';
 import { extractPendingObjectiveTasks } from './pending-objective-tasks';
+
+function normalizeCatalogTags(tags: unknown): string[] {
+  if (!Array.isArray(tags)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of tags) {
+    if (typeof raw !== 'string') {
+      continue;
+    }
+    const tag = raw.trim().toLowerCase();
+    if (!tag || seen.has(tag)) {
+      continue;
+    }
+    seen.add(tag);
+    result.push(tag);
+  }
+  return result;
+}
+
+function isAdelantoCatalogMessage(
+  item: Pick<StaffCatalogMessageDocument, 'tags'>,
+): boolean {
+  return normalizeCatalogTags(item.tags).includes(ADELANTO_CATALOG_TAG);
+}
 import {
   contactBelongsToAnyProject,
   mergeContactProjectIds,
@@ -161,6 +189,7 @@ export interface StaffCatalogRow {
   assignedPhone: string | null;
   sortOrder: number;
   active: boolean;
+  tags: string[];
   lastSentAt: string | null;
   repliedAt: string | null;
   responseLatencyMs: number | null;
@@ -1024,6 +1053,7 @@ export class MessagingService {
       assignedContactId,
       sortOrder,
       active: dto.active ?? true,
+      tags: normalizeCatalogTags(dto.tags),
     });
     await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.catalog]);
     return this.toCatalogRow(created);
@@ -1075,6 +1105,9 @@ export class MessagingService {
     }
     if (dto.active !== undefined) {
       doc.active = dto.active;
+    }
+    if (dto.tags !== undefined) {
+      doc.tags = normalizeCatalogTags(dto.tags);
     }
     if (dto.assignedContactId !== undefined) {
       const previousAssignee = doc.assignedContactId
@@ -1586,7 +1619,8 @@ export class MessagingService {
       let parsedProgress: StaffParsedProgress | undefined;
       if (
         openThread.source === 'catalog' ||
-        openThread.source === 'task_checklist'
+        openThread.source === 'task_checklist' ||
+        openThread.source === 'obra_adelanto'
       ) {
         try {
           const progressProjectId = openThread.projectId?.trim();
@@ -1701,6 +1735,11 @@ export class MessagingService {
           `Failed to advance task checklist after ${openThread.taskId}: ${message}`,
         );
       }
+    } else if (isMeaningfulReply && openThread?.source === 'obra_adelanto') {
+      // End of sequence for this slot — no further auto-send.
+      this.logger.debug(
+        `Obra adelanto answered for ${contact.phone} slot ${openThread.slotKey ?? 'none'}`,
+      );
     }
 
     const progressProjectId = openThread?.projectId?.trim() || inboundProjectId;
@@ -2398,6 +2437,7 @@ export class MessagingService {
       assignedPhone,
       sortOrder: item.sortOrder ?? 0,
       active: item.active,
+      tags: normalizeCatalogTags(item.tags),
       lastSentAt: sentAt ? sentAt.toISOString() : null,
       repliedAt: catalogComplete?.repliedAt
         ? catalogComplete.repliedAt.toISOString()
@@ -2806,12 +2846,19 @@ export class MessagingService {
       this.logger.warn(
         `Task checklist skipped for ${contact.phone}: no source for project ${projectId}`,
       );
+      await this.sendAdelantoCatchupIfNeeded(contact, slotKey, projectId);
       return;
     }
     const { sourceId, tasks, projectName } = loaded;
     if (tasks.length === 0) {
-      this.logger.warn(
-        `Task checklist skipped for ${contact.phone}: no pending tasks in project ${projectId}`,
+      this.logger.debug(
+        `Task checklist empty (in-window) for ${contact.phone} project ${projectId}`,
+      );
+      await this.sendAdelantoCatchupIfNeeded(
+        contact,
+        slotKey,
+        projectId,
+        sourceId,
       );
       return;
     }
@@ -2833,6 +2880,12 @@ export class MessagingService {
     if (nextIndex < 0) {
       this.logger.debug(
         `Task checklist complete for ${contact.phone} slot ${slotKey}`,
+      );
+      await this.sendAdelantoCatchupIfNeeded(
+        contact,
+        slotKey,
+        projectId,
+        sourceId,
       );
       return;
     }
@@ -2901,6 +2954,139 @@ export class MessagingService {
       });
       this.logger.warn(
         `Task checklist send failed for ${contact.phone} ${task.taskId}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
+  }
+
+  private async sendAdelantoCatchupIfNeeded(
+    contact: WhatsAppContactDocument,
+    slotKey: string,
+    projectId?: string,
+    sourceId?: Types.ObjectId,
+  ): Promise<void> {
+    if (!this.evolution.isConfigured()) {
+      return;
+    }
+
+    const already = await this.messages
+      .findOne({
+        contactId: contact._id,
+        slotKey,
+        direction: 'outbound',
+        source: 'obra_adelanto',
+        status: 'sent',
+      })
+      .exec();
+    if (already) {
+      return;
+    }
+
+    const openAsk = await this.messages
+      .findOne({
+        contactId: contact._id,
+        slotKey,
+        direction: 'outbound',
+        status: 'sent',
+        repliedAt: { $exists: false },
+        source: { $in: ['task_checklist', 'obra_adelanto', 'catalog'] },
+      })
+      .exec();
+    if (openAsk) {
+      return;
+    }
+
+    const adelanto = (
+      await this.catalog
+        .find({
+          active: true,
+          assignedContactId: contact._id,
+        })
+        .exec()
+    ).find((item) => isAdelantoCatalogMessage(item));
+    if (!adelanto) {
+      this.logger.debug(
+        `Obra adelanto skipped for ${contact.phone}: no adelanto catalog copy`,
+      );
+      return;
+    }
+
+    const membership = normalizeContactProjectIds(contact);
+    const resolvedProjectId =
+      (projectId && membership.includes(projectId) ? projectId : undefined) ??
+      (await this.resolvePreferredAskProjectId(contact)) ??
+      membership[0];
+    let resolvedSourceId = sourceId;
+    let labeledProject = resolvedProjectId ?? 'obra';
+    if (resolvedProjectId) {
+      const source = await this.resolveSourceForProject(resolvedProjectId);
+      if (source) {
+        resolvedSourceId = source._id;
+        labeledProject =
+          projectNombreFromSnapshotContent(source.content) ?? resolvedProjectId;
+      }
+    }
+
+    const labeledTitle = `${labeledProject} · Adelanto de obra`;
+    const body = adelanto.body;
+    const askedAt = new Date();
+    const language = normalizeLanguage(
+      contact.language,
+      getWhatsAppDefaultLanguage(),
+    );
+    const interactive: InteractiveTemplateBody = {
+      text: body,
+      title: labeledTitle,
+      widgets: [],
+    };
+
+    try {
+      const result = await this.evolution.sendInteractive(
+        contact.phone,
+        interactive,
+        body,
+        language,
+      );
+      await this.recordStaffMessage({
+        contactId: contact._id,
+        phone: contact.phone,
+        direction: 'outbound',
+        title: labeledTitle,
+        body,
+        catalogMessageId: adelanto._id,
+        sourceId: resolvedSourceId,
+        projectId: resolvedProjectId,
+        slotKey,
+        status: 'sent',
+        providerMessageId: result.providerMessageId,
+        sentAt: askedAt,
+        receivedAt: askedAt,
+        responseStatus: 'pending',
+        source: 'obra_adelanto',
+      });
+      this.logger.log(
+        `Obra adelanto sent for ${contact.phone} slot ${slotKey}`,
+      );
+      await this.cache.invalidatePaths([MESSAGING_CACHE_PATHS.catalog]);
+    } catch (error) {
+      await this.recordStaffMessage({
+        contactId: contact._id,
+        phone: contact.phone,
+        direction: 'outbound',
+        title: labeledTitle,
+        body,
+        catalogMessageId: adelanto._id,
+        sourceId: resolvedSourceId,
+        projectId: resolvedProjectId,
+        slotKey,
+        status: 'failed',
+        error: error instanceof Error ? error.message : 'unknown error',
+        sentAt: askedAt,
+        source: 'obra_adelanto',
+      });
+      this.logger.warn(
+        `Obra adelanto send failed for ${contact.phone}: ${
           error instanceof Error ? error.message : 'unknown error'
         }`,
       );
@@ -3069,16 +3255,26 @@ export class MessagingService {
     }
     const livePercentByTaskId =
       await this.loadLiveTaskPercentsForProject(projectId);
+    const timezone = await this.resolveAskTimezone();
+    const today = calendarDateInTimeZone(new Date(), timezone);
     return {
       sourceId: latest._id,
       projectName:
         projectNombreFromSnapshotContent(latest.content) ?? projectId,
-      tasks: extractPendingObjectiveTasks(
-        latest.content,
-        undefined,
+      tasks: extractPendingObjectiveTasks(latest.content, {
         livePercentByTaskId,
-      ),
+        today,
+      }),
     };
+  }
+
+  private async resolveAskTimezone(): Promise<string> {
+    const account = await this.accounts
+      .findOne({ activeProjectId: { $exists: true, $ne: null } })
+      .exec();
+    const fallback =
+      account ?? (await this.accounts.findOne().sort({ createdAt: -1 }).exec());
+    return normalizeSchedule(fallback?.emailNotificationSchedule).timezone;
   }
 
   /**
@@ -3277,11 +3473,13 @@ export class MessagingService {
           assignedContactId: contactId,
         })
         .exec()
-    ).sort(
-      (left, right) =>
-        (left.sortOrder ?? 0) - (right.sortOrder ?? 0) ||
-        String(left._id).localeCompare(String(right._id)),
-    );
+    )
+      .filter((item) => !isAdelantoCatalogMessage(item))
+      .sort(
+        (left, right) =>
+          (left.sortOrder ?? 0) - (right.sortOrder ?? 0) ||
+          String(left._id).localeCompare(String(right._id)),
+      );
     if (items.length === 0) {
       return { next: null, awaitingReply: false };
     }

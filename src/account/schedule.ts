@@ -64,6 +64,12 @@ const WEEKDAY_TO_JS: Record<string, number> = {
   Sat: 6,
 };
 
+/** Civil YYYY-MM-DD for `date` in `timeZone`. */
+export function calendarDateInTimeZone(date: Date, timeZone: string): string {
+  const parts = readZonedParts(date, timeZone || DEFAULT_SCHEDULE.timezone);
+  return `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
+}
+
 function readZonedParts(date: Date, timeZone: string): ZonedDateParts {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone,

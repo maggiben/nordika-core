@@ -139,7 +139,13 @@ export interface StaffMessage {
   providerMessageId?: string;
   error?: string;
   source?:
-    'test' | 'remind' | 'dispatch' | 'catalog' | 'webhook' | 'task_checklist';
+    | 'test'
+    | 'remind'
+    | 'dispatch'
+    | 'catalog'
+    | 'webhook'
+    | 'task_checklist'
+    | 'obra_adelanto';
   /** Objective-task ask metadata (task_checklist source). */
   taskId?: string;
   taskLabel?: string;
@@ -156,6 +162,9 @@ export interface StaffMessage {
   responseStatus?: 'green' | 'yellow' | 'red' | 'pending' | 'neutral';
 }
 
+/** Catalog tag: copy for the post-checklist adelanto ask (not a catalog step). */
+export const ADELANTO_CATALOG_TAG = 'adelanto';
+
 export interface StaffCatalogMessage {
   title: string;
   /** Full message body. Never truncated in storage. */
@@ -164,6 +173,8 @@ export interface StaffCatalogMessage {
   /** 1-based order within the assigned contact bucket; 0 when unassigned. */
   sortOrder: number;
   active: boolean;
+  /** Optional markers (e.g. `adelanto` for catch-up copy). */
+  tags?: string[];
 }
 
 export type WhatsAppContactDocument = HydratedDocument<WhatsAppContact>;
@@ -360,6 +371,7 @@ export const staffMessageSchema: Schema<StaffMessage> =
           'catalog',
           'webhook',
           'task_checklist',
+          'obra_adelanto',
         ],
       },
       taskId: { type: String, trim: true, index: true },
@@ -404,6 +416,7 @@ export const staffCatalogMessageSchema: Schema<StaffCatalogMessage> =
       },
       sortOrder: { type: Number, required: true, default: 0, min: 0 },
       active: { type: Boolean, required: true, default: true },
+      tags: { type: [String], required: true, default: [] },
     },
     { timestamps: true },
   );

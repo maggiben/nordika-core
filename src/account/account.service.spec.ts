@@ -6,9 +6,21 @@ import {
   normalizeSchedule,
   notificationSlotKey,
 } from './account.service';
-import { catalogSlotStartsAt } from './schedule';
+import { catalogSlotStartsAt, calendarDateInTimeZone } from './schedule';
 
 describe('account schedule helpers', () => {
+  it('formats civil dates in a timezone', () => {
+    expect(
+      calendarDateInTimeZone(
+        new Date('2026-07-17T12:00:00.000Z'),
+        'America/Argentina/Buenos_Aires',
+      ),
+    ).toBe('2026-07-17');
+    expect(
+      calendarDateInTimeZone(new Date('2026-07-17T03:00:00.000Z'), 'UTC'),
+    ).toBe('2026-07-17');
+  });
+
   it('normalizes missing and invalid schedule values', () => {
     expect(normalizeSchedule(null).enabled).toBe(false);
     expect(

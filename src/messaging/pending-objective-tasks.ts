@@ -4,7 +4,17 @@ export type PendingObjectiveTask = {
   avanceBase: number | null;
 };
 
-const DEFAULT_CAP = 20;
+export const DEFAULT_PENDING_TASK_CAP = 20;
+
+export type ExtractPendingObjectiveTasksOptions = {
+  cap?: number;
+  livePercentByTaskId?: ReadonlyMap<string, number>;
+  /**
+   * Civil date YYYY-MM-DD used for the planned `ini`/`fin` window.
+   * Defaults to today's UTC calendar date when omitted.
+   */
+  today?: string;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -18,6 +28,57 @@ function asString(value: unknown): string | null {
 
 function asNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/** Parse snapshot `ini`/`fin` into YYYY-MM-DD, or null when unusable. */
+export function parseTaskCalendarDate(value: unknown): string | null {
+  const raw = asString(value);
+  if (!raw) {
+    return null;
+  }
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(raw);
+  if (!match) {
+    return null;
+  }
+  const iso = match[1];
+  const [year, month, day] = iso.split('-').map(Number);
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
+  ) {
+    return null;
+  }
+  return iso;
+}
+
+/**
+ * Inclusive planned window: task is askable when today is between ini and fin.
+ * Missing or invalid dates are out of window.
+ */
+export function isTaskInDateWindow(
+  ini: unknown,
+  fin: unknown,
+  today: string,
+): boolean {
+  const start = parseTaskCalendarDate(ini);
+  const end = parseTaskCalendarDate(fin);
+  if (!start || !end) {
+    return false;
+  }
+  return start <= today && today <= end;
+}
+
+function utcToday(): string {
+  const now = new Date();
+  const year = now.getUTCFullYear();
+  const month = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(now.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 /** Pending when avance_base is missing or strictly less than 100. */
@@ -42,15 +103,30 @@ export function effectiveObjectiveAvance(
 
 /**
  * Extract pending `tareas_con_objetivo` from a Nodika snapshot payload.
- * Caps the list to avoid flooding WhatsApp.
+ * Applies the planned date window first, then a safety cap.
  * When `livePercentByTaskId` is provided, tasks with live percent >= 100 are
  * excluded even if snapshot `avance_base` is still below 100.
+ *
+ * Second argument may be a cap number (legacy) or an options object.
  */
 export function extractPendingObjectiveTasks(
   content: unknown,
-  cap = DEFAULT_CAP,
+  capOrOptions:
+    number | ExtractPendingObjectiveTasksOptions = DEFAULT_PENDING_TASK_CAP,
   livePercentByTaskId?: ReadonlyMap<string, number>,
 ): PendingObjectiveTask[] {
+  const options: ExtractPendingObjectiveTasksOptions =
+    typeof capOrOptions === 'number'
+      ? { cap: capOrOptions, livePercentByTaskId }
+      : {
+          ...capOrOptions,
+          livePercentByTaskId:
+            capOrOptions.livePercentByTaskId ?? livePercentByTaskId,
+        };
+  const cap = options.cap ?? DEFAULT_PENDING_TASK_CAP;
+  const liveMap = options.livePercentByTaskId;
+  const today = options.today?.trim() || utcToday();
+
   if (!isRecord(content)) {
     return [];
   }
@@ -64,12 +140,15 @@ export function extractPendingObjectiveTasks(
     const row: unknown = raw[index];
     const record = isRecord(row) ? row : {};
     const taskId = asString(record.id) ?? `task-${index + 1}`;
-    const livePercent = livePercentByTaskId?.get(taskId);
+    const livePercent = liveMap?.get(taskId);
     if (
       !isPendingObjectiveAvance(
         effectiveObjectiveAvance(record.avance_base, livePercent),
       )
     ) {
+      continue;
+    }
+    if (!isTaskInDateWindow(record.ini, record.fin, today)) {
       continue;
     }
     pending.push({
