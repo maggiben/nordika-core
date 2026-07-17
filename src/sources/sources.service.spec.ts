@@ -1,4 +1,8 @@
-import { NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import {
+  InternalServerErrorException,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import type { Connection } from 'mongoose';
 import { OptionalCacheService } from '../cache/optional-cache.service';
 import { SourcesService } from './sources.service';
@@ -11,6 +15,41 @@ describe('SourcesService', () => {
     invalidatePaths.mockClear();
   });
 
+  function connectionWithModels(models: {
+    source: Record<string, unknown>;
+    message?: Record<string, unknown>;
+    contact?: Record<string, unknown>;
+  }): Connection {
+    const messageModel = models.message ?? {
+      deleteMany: jest.fn().mockReturnValue({
+        exec: () => Promise.resolve({ deletedCount: 0 }),
+      }),
+    };
+    const contactModel = models.contact ?? {
+      find: jest.fn().mockReturnValue({
+        lean: () => ({
+          exec: () => Promise.resolve([]),
+        }),
+      }),
+      updateOne: jest.fn().mockReturnValue({
+        exec: () => Promise.resolve({ modifiedCount: 0 }),
+      }),
+    };
+    const model = jest.fn((name: string) => {
+      if (name === 'SourceOfTruth') {
+        return models.source;
+      }
+      if (name === 'StaffMessage') {
+        return messageModel;
+      }
+      if (name === 'WhatsAppContact') {
+        return contactModel;
+      }
+      return models.source;
+    });
+    return { model, models: {} } as unknown as Connection;
+  }
+
   it('stores the parsed JSON and returns source metadata', async () => {
     const createdAt = new Date('2026-01-01T00:00:00.000Z');
     const create = jest.fn().mockResolvedValue({
@@ -20,9 +59,10 @@ describe('SourcesService', () => {
       projectId: 'proj_1',
     });
     const sourceModel = { create };
-    const model = jest.fn().mockReturnValue(sourceModel);
-    const connection = { model, models: {} } as unknown as Connection;
-    const service = new SourcesService(connection, cache);
+    const service = new SourcesService(
+      connectionWithModels({ source: sourceModel }),
+      cache,
+    );
 
     await expect(
       service.create('source.json', {
@@ -91,9 +131,10 @@ describe('SourcesService', () => {
       }),
     });
     const sourceModel = { find };
-    const model = jest.fn().mockReturnValue(sourceModel);
-    const connection = { model, models: {} } as unknown as Connection;
-    const service = new SourcesService(connection, cache);
+    const service = new SourcesService(
+      connectionWithModels({ source: sourceModel }),
+      cache,
+    );
 
     await expect(service.listLatestPerProject()).resolves.toEqual([
       {
@@ -117,37 +158,132 @@ describe('SourcesService', () => {
     ]);
   });
 
-  it('deletes all sources for a projectId', async () => {
-    const deleteMany = jest.fn().mockReturnValue({
+  it('deletes sources and clears messaging progress for a projectId', async () => {
+    const countDocuments = jest.fn().mockReturnValue({
+      exec: () => Promise.resolve(2),
+    });
+    const deleteManySources = jest.fn().mockReturnValue({
       exec: () => Promise.resolve({ deletedCount: 2 }),
     });
-    const sourceModel = { deleteMany };
-    const model = jest.fn().mockReturnValue(sourceModel);
-    const connection = { model, models: {} } as unknown as Connection;
-    const service = new SourcesService(connection, cache);
+    const deleteManyMessages = jest.fn().mockReturnValue({
+      exec: () => Promise.resolve({ deletedCount: 5 }),
+    });
+    const updateOne = jest.fn().mockReturnValue({
+      exec: () => Promise.resolve({ modifiedCount: 1 }),
+    });
+    const contactIdKeep = { toString: () => 'contact_1' };
+    const contactIdClear = { toString: () => 'contact_2' };
+    const findContacts = jest.fn().mockReturnValue({
+      lean: () => ({
+        exec: () =>
+          Promise.resolve([
+            {
+              _id: contactIdKeep,
+              projectIds: ['proj_a', 'proj_b'],
+              projectId: 'proj_a',
+            },
+            {
+              _id: contactIdClear,
+              projectIds: ['proj_a'],
+              projectId: 'proj_a',
+            },
+          ]),
+      }),
+    });
+    const sourceModel = {
+      countDocuments,
+      deleteMany: deleteManySources,
+    };
+    const messageModel = { deleteMany: deleteManyMessages };
+    const contactModel = { find: findContacts, updateOne };
+    const service = new SourcesService(
+      connectionWithModels({
+        source: sourceModel,
+        message: messageModel,
+        contact: contactModel,
+      }),
+      cache,
+    );
 
     await expect(service.deleteByProjectId('proj_a')).resolves.toEqual({
       projectId: 'proj_a',
       deletedCount: 2,
     });
-    expect(deleteMany).toHaveBeenCalledWith({
+    expect(deleteManyMessages).toHaveBeenCalledWith({ projectId: 'proj_a' });
+    expect(updateOne).toHaveBeenCalledWith(
+      { _id: contactIdKeep },
+      {
+        $set: {
+          projectIds: ['proj_b'],
+          projectId: 'proj_b',
+        },
+      },
+    );
+    expect(updateOne).toHaveBeenCalledWith(
+      { _id: contactIdClear },
+      {
+        $set: {
+          projectIds: [],
+          projectId: null,
+          catalogSlotKey: null,
+          catalogSlotStartAt: null,
+        },
+      },
+    );
+    expect(deleteManySources).toHaveBeenCalledWith({
       $or: [{ projectId: 'proj_a' }, { 'content.meta.projectId': 'proj_a' }],
     });
-    expect(invalidatePaths).toHaveBeenCalledWith(['/sources']);
+    expect(invalidatePaths).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        '/sources',
+        '/messaging/progress?projectId=proj_a',
+        '/messaging/progress',
+        '/messaging/roster',
+        '/messaging/contacts',
+        '/messaging/catalog',
+        '/messaging/task-checklist',
+      ]),
+    );
   });
 
   it('rejects delete when no sources match the projectId', async () => {
-    const deleteMany = jest.fn().mockReturnValue({
-      exec: () => Promise.resolve({ deletedCount: 0 }),
+    const countDocuments = jest.fn().mockReturnValue({
+      exec: () => Promise.resolve(0),
     });
-    const sourceModel = { deleteMany };
-    const model = jest.fn().mockReturnValue(sourceModel);
-    const connection = { model, models: {} } as unknown as Connection;
-    const service = new SourcesService(connection, cache);
+    const deleteMany = jest.fn();
+    const sourceModel = { countDocuments, deleteMany };
+    const service = new SourcesService(
+      connectionWithModels({ source: sourceModel }),
+      cache,
+    );
 
     await expect(service.deleteByProjectId('missing')).rejects.toThrow(
       NotFoundException,
     );
+    expect(deleteMany).not.toHaveBeenCalled();
+    expect(invalidatePaths).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when progress cleanup throws', async () => {
+    const countDocuments = jest.fn().mockReturnValue({
+      exec: () => Promise.resolve(1),
+    });
+    const deleteManySources = jest.fn();
+    const deleteManyMessages = jest.fn().mockReturnValue({
+      exec: () => Promise.reject(new Error('mongo down')),
+    });
+    const service = new SourcesService(
+      connectionWithModels({
+        source: { countDocuments, deleteMany: deleteManySources },
+        message: { deleteMany: deleteManyMessages },
+      }),
+      cache,
+    );
+
+    await expect(service.deleteByProjectId('proj_a')).rejects.toThrow(
+      InternalServerErrorException,
+    );
+    expect(deleteManySources).not.toHaveBeenCalled();
     expect(invalidatePaths).not.toHaveBeenCalled();
   });
 
