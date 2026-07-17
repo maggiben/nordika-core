@@ -186,16 +186,65 @@ export class SourcesService {
   }
 
   /**
-   * Removes StaffMessage history / parsed progress for the obra, strips the
-   * id from contact membership, and deletes any dedicated progress collection
-   * rows when those models are registered.
+   * Wipe WhatsApp / messaging history for this obra:
+   * - StaffMessages stamped with the projectId
+   * - StaffMessages tied to this obra's SourceOfTruth rows (sourceId)
+   * - All StaffMessages for leads whose only obra was this one (covers legacy
+   *   rows missing projectId)
+   * Then strip project membership from contacts.
    */
   private async clearProjectProgress(projectId: string): Promise<void> {
+    const sourceModel = this.getSourceModel();
     const messageModel = this.getStaffMessageModel();
-    await messageModel.deleteMany({ projectId }).exec();
+    const contactModel = this.getContactModel();
+
+    const sourceFilter = {
+      $or: [{ projectId }, { 'content.meta.projectId': projectId }],
+    };
+    const sources = (await sourceModel
+      .find(sourceFilter)
+      .select('_id')
+      .lean()
+      .exec()) as Array<{ _id: unknown }>;
+    const sourceIds = sources.map((row) => row._id);
+
+    const contacts = (await contactModel
+      .find({
+        $or: [{ projectIds: projectId }, { projectId }],
+      })
+      .lean()
+      .exec()) as ContactLean[];
+
+    const soleContactIds = contacts
+      .filter((contact) => remainingProjectIds(contact, projectId).length === 0)
+      .map((contact) => contact._id);
+
+    const messageClauses: Record<string, unknown>[] = [{ projectId }];
+    if (sourceIds.length > 0) {
+      messageClauses.push({ sourceId: { $in: sourceIds } });
+    }
+    if (soleContactIds.length > 0) {
+      messageClauses.push({ contactId: { $in: soleContactIds } });
+    }
+
+    await messageModel.deleteMany({ $or: messageClauses }).exec();
 
     await this.clearDedicatedParsedProgress(projectId);
-    await this.stripProjectFromContacts(projectId);
+
+    for (const contact of contacts) {
+      const nextIds = remainingProjectIds(contact, projectId);
+      const patch: Record<string, unknown> = {
+        projectIds: nextIds,
+        projectId: nextIds[0] ?? null,
+      };
+      if (nextIds.length === 0) {
+        patch.catalogSlotKey = null;
+        patch.catalogSlotStartAt = null;
+      }
+      await contactModel
+        .updateOne({ _id: contact._id }, { $set: patch })
+        .exec();
+    }
   }
 
   private async clearDedicatedParsedProgress(projectId: string): Promise<void> {
@@ -212,41 +261,6 @@ export class SourcesService {
         continue;
       }
       await existing.deleteMany({ projectId }).exec();
-    }
-  }
-
-  private async stripProjectFromContacts(projectId: string): Promise<void> {
-    const contactModel = this.getContactModel();
-    const contacts = (await contactModel
-      .find({
-        $or: [{ projectIds: projectId }, { projectId }],
-      })
-      .lean()
-      .exec()) as ContactLean[];
-
-    for (const contact of contacts) {
-      const nextIds = [
-        ...new Set(
-          (contact.projectIds ?? [])
-            .map((id) => (typeof id === 'string' ? id.trim() : ''))
-            .filter((id) => id.length > 0 && id !== projectId),
-        ),
-      ];
-      const legacyMatches = contact.projectId?.trim() === projectId;
-      const patch: Record<string, unknown> = {
-        projectIds: nextIds,
-        projectId: nextIds[0] ?? null,
-      };
-      if (nextIds.length === 0 || legacyMatches) {
-        // Empty membership → drop catalog slot so a re-upload starts clean.
-        if (nextIds.length === 0) {
-          patch.catalogSlotKey = null;
-          patch.catalogSlotStartAt = null;
-        }
-      }
-      await contactModel
-        .updateOne({ _id: contact._id }, { $set: patch })
-        .exec();
     }
   }
 
@@ -306,4 +320,18 @@ export class SourcesService {
 
 function sourceTimestamp(row: SourceDocument): number {
   return row.createdAt?.getTime() ?? row._id.getTimestamp().getTime();
+}
+
+function remainingProjectIds(
+  contact: ContactLean,
+  removedProjectId: string,
+): string[] {
+  const fromList = (contact.projectIds ?? [])
+    .map((id) => (typeof id === 'string' ? id.trim() : ''))
+    .filter((id) => id.length > 0 && id !== removedProjectId);
+  const legacy = contact.projectId?.trim();
+  if (legacy && legacy !== removedProjectId && !fromList.includes(legacy)) {
+    fromList.push(legacy);
+  }
+  return [...new Set(fromList)];
 }

@@ -159,8 +159,16 @@ describe('SourcesService', () => {
   });
 
   it('deletes sources and clears messaging progress for a projectId', async () => {
+    const sourceIdA = { toString: () => 'src_a' };
     const countDocuments = jest.fn().mockReturnValue({
       exec: () => Promise.resolve(2),
+    });
+    const findSources = jest.fn().mockReturnValue({
+      select: () => ({
+        lean: () => ({
+          exec: () => Promise.resolve([{ _id: sourceIdA }]),
+        }),
+      }),
     });
     const deleteManySources = jest.fn().mockReturnValue({
       exec: () => Promise.resolve({ deletedCount: 2 }),
@@ -192,6 +200,7 @@ describe('SourcesService', () => {
     });
     const sourceModel = {
       countDocuments,
+      find: findSources,
       deleteMany: deleteManySources,
     };
     const messageModel = { deleteMany: deleteManyMessages };
@@ -209,7 +218,13 @@ describe('SourcesService', () => {
       projectId: 'proj_a',
       deletedCount: 2,
     });
-    expect(deleteManyMessages).toHaveBeenCalledWith({ projectId: 'proj_a' });
+    expect(deleteManyMessages).toHaveBeenCalledWith({
+      $or: [
+        { projectId: 'proj_a' },
+        { sourceId: { $in: [sourceIdA] } },
+        { contactId: { $in: [contactIdClear] } },
+      ],
+    });
     expect(updateOne).toHaveBeenCalledWith(
       { _id: contactIdKeep },
       {
