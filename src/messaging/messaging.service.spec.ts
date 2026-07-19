@@ -3367,6 +3367,56 @@ describe('MessagingService', () => {
     expect(stillJune.marks).toHaveLength(1);
   });
 
+  it('ingests attendance marks from an attendance catalog WhatsApp reply', async () => {
+    const contact = await contacts.create({
+      phone: '5491111111171',
+      label: 'Attendance WA',
+      active: true,
+      tags: ['staff'],
+      projectIds: ['proj_a'],
+      projectId: 'proj_a',
+      orgReports: [
+        { id: 'r1', name: 'Ana Pérez', role: 'operario' },
+        { id: 'r2', name: 'Luis Gómez', role: 'jornalero' },
+      ],
+    });
+    const catalogMessage = await service.createCatalogMessage({
+      title: 'Asistencia del equipo — Attendance WA',
+      body: 'Por favor reportá la asistencia de hoy',
+      assignedContactId: String(contact._id),
+      tags: ['attendance'],
+    });
+    await service.sendCatalogMessage(catalogMessage._id, {
+      contactId: String(contact._id),
+    });
+    const outbound = messages.store.find(
+      (item) => item.direction === 'outbound',
+    );
+    if (outbound) {
+      outbound.sentAt = new Date(Date.now() - 60_000);
+    }
+
+    await service.recordInboundMessage({
+      phone: '5491111111171',
+      body: 'Ana Pérez día completo\nLuis Gómez faltó',
+    });
+
+    expect(parseReply).not.toHaveBeenCalled();
+    const refreshed = await contacts.findById(contact._id).exec();
+    expect(refreshed?.attendanceMarks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reportId: 'r1',
+          status: 'full_day',
+        }),
+        expect.objectContaining({
+          reportId: 'r2',
+          status: 'absent',
+        }),
+      ]),
+    );
+  });
+
   it('merges project membership when createContact hits an existing phone', async () => {
     await contacts.create({
       phone: '5491111111155',

@@ -56,6 +56,11 @@ import {
   mergeAttendanceMonth,
   normalizeAttendanceMarks,
 } from './attendance-marks';
+import {
+  isAttendanceCatalogMessage,
+  parseAttendanceReply,
+  upsertAttendanceMarksForDate,
+} from './attendance-reply-parse';
 import { normalizeOrgReports } from './org-reports';
 import {
   CICLO_MODEL,
@@ -1687,7 +1692,54 @@ export class MessagingService {
       openThread.responseStatus = responseStatus;
 
       let parsedProgress: StaffParsedProgress | undefined;
-      if (
+      let attendanceCatalog = false;
+      if (openThread.source === 'catalog' && openThread.catalogMessageId) {
+        const catalogDoc = await this.catalog
+          .findById(openThread.catalogMessageId)
+          .exec();
+        attendanceCatalog = isAttendanceCatalogMessage({
+          tags: catalogDoc?.tags,
+          title: catalogDoc?.title ?? openThread.title,
+          body: catalogDoc?.body ?? openThread.body,
+        });
+      } else {
+        attendanceCatalog = isAttendanceCatalogMessage({
+          title: openThread.title,
+          body: openThread.body,
+        });
+      }
+
+      if (attendanceCatalog) {
+        try {
+          const timezone = await this.resolveAskTimezone();
+          const date = calendarDateInTimeZone(repliedAt, timezone);
+          const reports = normalizeOrgReports(contact.orgReports);
+          const parsedMarks = parseAttendanceReply({
+            replyBody,
+            reports,
+            date,
+          });
+          if (parsedMarks.length > 0) {
+            const existing = normalizeAttendanceMarks(contact.attendanceMarks);
+            contact.attendanceMarks = upsertAttendanceMarksForDate(
+              existing,
+              parsedMarks,
+            );
+            await contact.save();
+            this.logger.log(
+              `Attendance ingest for ${contact.phone}: ${parsedMarks.length} mark(s) on ${date}`,
+            );
+          }
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : 'Unknown attendance ingest error';
+          this.logger.warn(
+            `Attendance ingest failed for thread ${String(openThread._id)}: ${message}`,
+          );
+        }
+      } else if (
         openThread.source === 'catalog' ||
         openThread.source === 'task_checklist' ||
         openThread.source === 'obra_adelanto'
