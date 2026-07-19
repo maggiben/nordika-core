@@ -3417,6 +3417,106 @@ describe('MessagingService', () => {
     );
   });
 
+  it('ingests attendance from a manual catalog send even when an earlier non-attendance step is open', async () => {
+    const contact = await contacts.create({
+      phone: '5491111111172',
+      label: 'Manual Attendance',
+      active: true,
+      tags: ['staff'],
+      projectIds: ['proj_a'],
+      projectId: 'proj_a',
+      orgReports: [{ id: 'r1', name: 'Ana', role: 'operario' }],
+    });
+    const performance = await service.createCatalogMessage({
+      title: 'Performance',
+      body: '¿Cómo les fue?',
+      assignedContactId: String(contact._id),
+    });
+    const attendance = await service.createCatalogMessage({
+      title: 'Asistencia',
+      body: 'Marcá día completo, media jornada o faltó por persona.',
+      assignedContactId: String(contact._id),
+    });
+    // Simulate two open outbounds (e.g. prior flood / race) without sequential gate.
+    const sentAt = new Date(Date.now() - 60_000);
+    await messages.create({
+      contactId: contact._id,
+      phone: contact.phone,
+      direction: 'outbound',
+      title: `1/2 · ${performance.title}`,
+      body: performance.body,
+      catalogMessageId: performance._id,
+      status: 'sent',
+      sentAt,
+      receivedAt: sentAt,
+      responseStatus: 'pending',
+      source: 'catalog',
+    });
+    await messages.create({
+      contactId: contact._id,
+      phone: contact.phone,
+      direction: 'outbound',
+      title: `2/2 · ${attendance.title}`,
+      body: attendance.body,
+      catalogMessageId: attendance._id,
+      status: 'sent',
+      sentAt: new Date(Date.now() - 30_000),
+      receivedAt: new Date(Date.now() - 30_000),
+      responseStatus: 'pending',
+      source: 'catalog',
+    });
+
+    await service.recordInboundMessage({
+      phone: '5491111111172',
+      body: 'Ana día completo',
+    });
+
+    expect(parseReply).not.toHaveBeenCalled();
+    const refreshed = await contacts.findById(contact._id).exec();
+    expect(refreshed?.attendanceMarks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ reportId: 'r1', status: 'full_day' }),
+      ]),
+    );
+  });
+
+  it('ingests attendance from a free-text team message (test-send)', async () => {
+    const contact = await contacts.create({
+      phone: '5491111111173',
+      label: 'Free text',
+      active: true,
+      tags: ['staff'],
+      orgReports: [{ id: 'r1', name: 'Luis', role: 'jornalero' }],
+    });
+    await service.sendTestMessage({
+      phone: '5491111111173',
+      text: [
+        'Asistencia del equipo — Free text',
+        'Por favor reportá la asistencia de hoy',
+        '1. Luis - Día completo / Media jornada / Faltó',
+      ].join('\n'),
+    });
+    const outbound = messages.store.find(
+      (item) => item.direction === 'outbound' && item.source === 'test',
+    );
+    expect(outbound?.title).toContain('Asistencia del equipo');
+    if (outbound) {
+      outbound.sentAt = new Date(Date.now() - 30_000);
+    }
+
+    await service.recordInboundMessage({
+      phone: '5491111111173',
+      body: 'Luis faltó',
+    });
+
+    const refreshed = await contacts.findById(contact._id).exec();
+    expect(refreshed?.attendanceMarks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ reportId: 'r1', status: 'absent' }),
+      ]),
+    );
+  });
+
   it('merges project membership when createContact hits an existing phone', async () => {
     await contacts.create({
       phone: '5491111111155',

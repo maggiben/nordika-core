@@ -8,6 +8,7 @@
 - [x] 2.1 On attendance catalog reply, upsert marks for reply calendar date
 - [x] 2.2 Skip progress parse for attendance replies
 - [x] 2.3 Add unit tests for parser + inbound ingest
+- [x] 2.4 Prefer open attendance outbounds (manual catalog / free-text) when the reply looks like attendance, not only the lowest catalog step
 
 ## 3. Validation
 

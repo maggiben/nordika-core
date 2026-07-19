@@ -26,6 +26,12 @@ describe('attendance-reply-parse', () => {
         body: "Please report today's attendance",
       }),
     ).toBe(true);
+    expect(
+      isAttendanceCatalogMessage({
+        title: 'Asistencia',
+        body: 'Marcá día completo o faltó',
+      }),
+    ).toBe(true);
     expect(isAttendanceCatalogMessage({ title: 'Performance' })).toBe(false);
   });
 

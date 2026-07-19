@@ -58,14 +58,43 @@ export function isAttendanceCatalogMessage(input: {
   if (tags.includes(ATTENDANCE_CATALOG_TAG)) {
     return true;
   }
-  const haystack = `${input.title ?? ''}\n${input.body ?? ''}`.toLowerCase();
-  return (
+  const haystack = normalizeForMatch(
+    `${input.title ?? ''}\n${input.body ?? ''}`,
+  );
+  if (!haystack) {
+    return false;
+  }
+  if (
     haystack.includes('asistencia del equipo') ||
     haystack.includes('team attendance') ||
     haystack.includes('asistencia de hoy') ||
     haystack.includes("today's attendance") ||
-    haystack.includes('todays attendance')
-  );
+    haystack.includes('todays attendance') ||
+    /\basistencia\b/.test(haystack) ||
+    /\battendance\b/.test(haystack)
+  ) {
+    return true;
+  }
+  // Manual catalog drafts often keep the checklist wording even without the tag.
+  const hasChoice =
+    haystack.includes('dia completo') ||
+    haystack.includes('full day') ||
+    haystack.includes('media jornada') ||
+    haystack.includes('half day');
+  const hasAbsent =
+    haystack.includes('falto') ||
+    haystack.includes('absent') ||
+    haystack.includes('ausente');
+  return hasChoice && hasAbsent;
+}
+
+/** True when a free-text reply looks like an attendance report. */
+export function replyLooksLikeAttendance(replyBody: string): boolean {
+  const normalized = normalizeForMatch(replyBody ?? '');
+  if (!normalized) {
+    return false;
+  }
+  return Boolean(detectStatus(normalized));
 }
 
 function reportNameMatchers(report: StaffOrgReport): string[] {

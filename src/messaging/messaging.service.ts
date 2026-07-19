@@ -59,6 +59,7 @@ import {
 import {
   isAttendanceCatalogMessage,
   parseAttendanceReply,
+  replyLooksLikeAttendance,
   upsertAttendanceMarksForDate,
 } from './attendance-reply-parse';
 import { normalizeOrgReports } from './org-reports';
@@ -909,11 +910,17 @@ export class MessagingService {
       );
 
       if (contact) {
+        const title =
+          text
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .find(Boolean)
+            ?.slice(0, 120) || 'Mensaje libre';
         await this.recordStaffMessage({
           contactId: contact._id,
           phone,
           direction: 'outbound',
-          title: 'Performance check-in',
+          title,
           body: text,
           status: 'sent',
           providerMessageId: result.providerMessageId,
@@ -935,11 +942,17 @@ export class MessagingService {
       if (contact) {
         const message =
           error instanceof Error ? error.message : 'Unknown send error';
+        const title =
+          text
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .find(Boolean)
+            ?.slice(0, 120) || 'Mensaje libre';
         await this.recordStaffMessage({
           contactId: contact._id,
           phone,
           direction: 'outbound',
-          title: 'Performance check-in',
+          title,
           body: text,
           status: 'failed',
           error: message,
@@ -1662,7 +1675,13 @@ export class MessagingService {
       );
     }
     const openThread = isMeaningfulReply
-      ? await this.pickOpenOutboundThread(contact._id, openCandidates)
+      ? await this.resolveOpenOutboundForReply({
+          contactId: contact._id,
+          contact,
+          openCandidates,
+          replyBody,
+          repliedAt,
+        })
       : undefined;
     if (isMeaningfulReply && !openThread) {
       this.logger.warn(
@@ -2666,6 +2685,95 @@ export class MessagingService {
       }
     }
     return openCandidates;
+  }
+
+  /**
+   * Prefer the lowest catalog sortOrder still awaiting a reply so operators
+   * answer step N before we treat the reply as belonging to a later flood.
+   * Attendance asks (manual catalog or free-text test) win when the reply
+   * looks like attendance or parses to marks — same as automated catalog.
+   */
+  private async resolveOpenOutboundForReply(input: {
+    contactId: Types.ObjectId;
+    contact: WhatsAppContactDocument;
+    openCandidates: StaffMessageDocument[];
+    replyBody: string;
+    repliedAt: Date;
+  }): Promise<StaffMessageDocument | undefined> {
+    const attendanceOpen = await this.preferAttendanceOpenThread(input);
+    if (attendanceOpen) {
+      return attendanceOpen;
+    }
+    return this.pickOpenOutboundThread(input.contactId, input.openCandidates);
+  }
+
+  private async outboundLooksLikeAttendance(
+    item: StaffMessageDocument,
+  ): Promise<boolean> {
+    if (item.source === 'catalog' && item.catalogMessageId) {
+      const catalogDoc = await this.catalog
+        .findById(item.catalogMessageId)
+        .exec();
+      return isAttendanceCatalogMessage({
+        tags: catalogDoc?.tags,
+        title: catalogDoc?.title ?? item.title,
+        body: catalogDoc?.body ?? item.body,
+      });
+    }
+    return isAttendanceCatalogMessage({
+      title: item.title,
+      body: item.body,
+    });
+  }
+
+  private async preferAttendanceOpenThread(input: {
+    contact: WhatsAppContactDocument;
+    openCandidates: StaffMessageDocument[];
+    replyBody: string;
+    repliedAt: Date;
+  }): Promise<StaffMessageDocument | undefined> {
+    const attendanceCandidates: StaffMessageDocument[] = [];
+    for (const item of input.openCandidates) {
+      if (await this.outboundLooksLikeAttendance(item)) {
+        attendanceCandidates.push(item);
+      }
+    }
+    if (attendanceCandidates.length === 0) {
+      return undefined;
+    }
+
+    attendanceCandidates.sort((left, right) => {
+      const leftMs =
+        left.sentAt?.getTime() ??
+        (
+          left as StaffMessageDocument & { createdAt?: Date }
+        ).createdAt?.getTime() ??
+        0;
+      const rightMs =
+        right.sentAt?.getTime() ??
+        (
+          right as StaffMessageDocument & { createdAt?: Date }
+        ).createdAt?.getTime() ??
+        0;
+      return rightMs - leftMs;
+    });
+
+    const reports = normalizeOrgReports(input.contact.orgReports);
+    const timezone = await this.resolveAskTimezone();
+    const date = calendarDateInTimeZone(input.repliedAt, timezone);
+    const parsedMarks = parseAttendanceReply({
+      replyBody: input.replyBody,
+      reports,
+      date,
+    });
+    const replyLooksAttendance =
+      replyLooksLikeAttendance(input.replyBody) || parsedMarks.length > 0;
+
+    if (!replyLooksAttendance) {
+      return undefined;
+    }
+
+    return attendanceCandidates[0];
   }
 
   /**
