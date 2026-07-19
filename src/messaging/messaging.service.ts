@@ -48,7 +48,15 @@ import {
   UpdateContactDto,
   UpdateTemplateDto,
   UpsertWorkStatusDto,
+  PutContactAttendanceDto,
 } from './messaging.dto';
+import {
+  filterMarksByYearMonth,
+  isYearMonth,
+  mergeAttendanceMonth,
+  normalizeAttendanceMarks,
+} from './attendance-marks';
+import { normalizeOrgReports } from './org-reports';
 import {
   CICLO_MODEL,
   CicloDocument,
@@ -71,6 +79,7 @@ import {
   WORK_STATUS_MODEL,
   WhatsAppContactDocument,
   WorkStatusDocument,
+  type StaffAttendanceMark,
   type StaffOrgReport,
 } from './messaging.schema';
 import { extractPendingObjectiveTasks } from './pending-objective-tasks';
@@ -105,7 +114,6 @@ import {
   mergeContactProjectIds,
   normalizeContactProjectIds,
 } from './contact-project-ids';
-import { normalizeOrgReports } from './org-reports';
 import { ProgressParseService } from './progress-parse.service';
 import {
   computeResponseLatencyMs,
@@ -378,6 +386,65 @@ export class MessagingService {
       MESSAGING_CACHE_PATHS.roster,
     ]);
     return contact;
+  }
+
+  async getContactAttendance(
+    id: string,
+    yearMonth?: string,
+  ): Promise<{
+    contactId: string;
+    yearMonth: string | null;
+    marks: StaffAttendanceMark[];
+  }> {
+    if (yearMonth && !isYearMonth(yearMonth)) {
+      throw new BadRequestException('yearMonth must be YYYY-MM.');
+    }
+    const contact = await this.contacts
+      .findById(this.toObjectId(id, 'contact'))
+      .exec();
+    if (!contact) {
+      throw new NotFoundException('Contact not found.');
+    }
+    const all = normalizeAttendanceMarks(contact.attendanceMarks);
+    return {
+      contactId: String(contact._id),
+      yearMonth: yearMonth ?? null,
+      marks: filterMarksByYearMonth(all, yearMonth),
+    };
+  }
+
+  async putContactAttendanceMonth(
+    id: string,
+    dto: PutContactAttendanceDto,
+  ): Promise<{
+    contactId: string;
+    yearMonth: string;
+    marks: StaffAttendanceMark[];
+  }> {
+    if (!isYearMonth(dto.yearMonth)) {
+      throw new BadRequestException('yearMonth must be YYYY-MM.');
+    }
+    const contact = await this.contacts
+      .findById(this.toObjectId(id, 'contact'))
+      .exec();
+    if (!contact) {
+      throw new NotFoundException('Contact not found.');
+    }
+
+    const existing = normalizeAttendanceMarks(contact.attendanceMarks);
+    const next = mergeAttendanceMonth(existing, dto.yearMonth, dto.marks);
+    contact.attendanceMarks = next;
+    await contact.save();
+    await this.cache.invalidatePaths([
+      MESSAGING_CACHE_PATHS.contacts,
+      MESSAGING_CACHE_PATHS.roster,
+    ]);
+
+    return {
+      contactId: String(contact._id),
+      yearMonth: dto.yearMonth,
+      marks: filterMarksByYearMonth(next, dto.yearMonth),
+    };
   }
 
   async createTemplate(

@@ -3332,6 +3332,41 @@ describe('MessagingService', () => {
     expect(row?.orgReports[0]?.name).toBe('Ana');
   });
 
+  it('persists attendance marks by month without clearing other months', async () => {
+    const contact = await contacts.create({
+      phone: '5491111111170',
+      label: 'Attendance Lead',
+      active: true,
+      tags: ['staff'],
+      projectIds: ['proj_a'],
+      projectId: 'proj_a',
+      attendanceMarks: [
+        { reportId: 'r1', date: '2026-06-30', status: 'justified' },
+      ],
+    });
+    const id = String(contact._id);
+    const july = await service.putContactAttendanceMonth(id, {
+      yearMonth: '2026-07',
+      marks: [
+        { reportId: 'r1', date: '2026-07-01', status: 'full_day' },
+        { reportId: 'r2', date: '2026-07-02', status: 'absent' },
+      ],
+    });
+    expect(july.marks).toHaveLength(2);
+    const june = await service.getContactAttendance(id, '2026-06');
+    expect(june.marks).toEqual([
+      { reportId: 'r1', date: '2026-06-30', status: 'justified' },
+    ]);
+    await service.putContactAttendanceMonth(id, {
+      yearMonth: '2026-07',
+      marks: [],
+    });
+    const cleared = await service.getContactAttendance(id, '2026-07');
+    expect(cleared.marks).toEqual([]);
+    const stillJune = await service.getContactAttendance(id, '2026-06');
+    expect(stillJune.marks).toHaveLength(1);
+  });
+
   it('merges project membership when createContact hits an existing phone', async () => {
     await contacts.create({
       phone: '5491111111155',

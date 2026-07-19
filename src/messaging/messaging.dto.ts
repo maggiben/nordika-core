@@ -149,6 +149,35 @@ export class UpdateContactDto {
   orgReports?: OrgReportDto[];
 }
 
+export class AttendanceMarkDto {
+  @IsString()
+  @Length(1, 120)
+  reportId!: string;
+
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    message: 'date must be YYYY-MM-DD.',
+  })
+  date!: string;
+
+  @IsIn(['full_day', 'half_day', 'absent', 'justified'])
+  status!: 'full_day' | 'half_day' | 'absent' | 'justified';
+}
+
+export class PutContactAttendanceDto {
+  @IsString()
+  @Matches(/^\d{4}-\d{2}$/, {
+    message: 'yearMonth must be YYYY-MM.',
+  })
+  yearMonth!: string;
+
+  @IsArray()
+  @ArrayMaxSize(2000)
+  @ValidateNested({ each: true })
+  @Type(() => AttendanceMarkDto)
+  marks!: AttendanceMarkDto[];
+}
+
 export class TemplateBodyDto {
   @IsString()
   @Length(1, 4000)

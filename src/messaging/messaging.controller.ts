@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -31,6 +32,7 @@ import {
   UpdateContactDto,
   UpdateTemplateDto,
   UpsertWorkStatusDto,
+  PutContactAttendanceDto,
 } from './messaging.dto';
 import {
   MessagingService,
@@ -59,6 +61,22 @@ export class MessagingController {
   @Patch('contacts/:id')
   updateContact(@Param('id') id: string, @Body() dto: UpdateContactDto) {
     return this.messaging.updateContact(id, dto);
+  }
+
+  @Get('contacts/:id/attendance')
+  getContactAttendance(
+    @Param('id') id: string,
+    @Query('yearMonth') yearMonth?: string,
+  ) {
+    return this.messaging.getContactAttendance(id, yearMonth);
+  }
+
+  @Put('contacts/:id/attendance')
+  putContactAttendance(
+    @Param('id') id: string,
+    @Body() dto: PutContactAttendanceDto,
+  ) {
+    return this.messaging.putContactAttendanceMonth(id, dto);
   }
 
   @Post('templates')

@@ -56,9 +56,21 @@ export interface WhatsAppContact {
   projectId?: string;
   /** Direct reports under this jefe de obra (org chart). */
   orgReports?: StaffOrgReport[];
+  /** Daily attendance marks for people under this lead. */
+  attendanceMarks?: StaffAttendanceMark[];
   /** Active catalog notification slot; replies before this cycle are ignored. */
   catalogSlotKey?: string;
   catalogSlotStartAt?: Date;
+}
+
+export type StaffAttendanceStatus =
+  'full_day' | 'half_day' | 'absent' | 'justified';
+
+export interface StaffAttendanceMark {
+  reportId: string;
+  /** ISO calendar date YYYY-MM-DD */
+  date: string;
+  status: StaffAttendanceStatus;
 }
 
 export interface MessageTemplate {
@@ -217,6 +229,20 @@ export const whatsAppContactSchema = new Schema<WhatsAppContact>(
             enum: ['operario', 'jornalero', 'otro'],
           },
           roleOther: { type: String, trim: true },
+        },
+      ],
+      default: [],
+    },
+    attendanceMarks: {
+      type: [
+        {
+          reportId: { type: String, required: true, trim: true },
+          date: { type: String, required: true, trim: true },
+          status: {
+            type: String,
+            required: true,
+            enum: ['full_day', 'half_day', 'absent', 'justified'],
+          },
         },
       ],
       default: [],
